@@ -147,7 +147,11 @@ class FrankaRealAdapter:
                 task_name=metadata.task_name,
                 language=metadata.language,
                 family=metadata.family,
-                metadata={"scene_reset": metadata.scene_reset, "seed": int(seed)},
+                metadata={
+                    "scene_reset": metadata.scene_reset,
+                    "seed": int(seed),
+                    "goal": dict(metadata.goal),
+                },
             )
         elif self._task_context is None:
             raise ValueError("reset needs a franka_real task name or metadata")
@@ -461,6 +465,7 @@ class FrankaRealAdapter:
             "scene_reset": ""
             if context is None
             else str(context.metadata.get("scene_reset", "")),
+            "goal": {} if context is None else dict(context.metadata.get("goal", {})),
         }
 
     def get_controller_metadata(self) -> dict[str, Any]:

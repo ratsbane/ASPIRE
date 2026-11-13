@@ -62,6 +62,14 @@ HOME_TOL_RAD = 0.05
 #: top-band statistics survive silhouette depth-bleed (proven by calibration).
 CAMERA_PREFERENCE = ("wrist", "scene")
 
+#: Depth-slab occupancy (wooden blocks have no colour rule): a spot counts as
+#: holding a block when at least this many depth points sit in the block band
+#: above the table inside the spot's window.
+SLAB_Z_MIN = TABLE_Z + 0.012
+SLAB_Z_MAX = TABLE_Z + 0.060
+MIN_SLAB_POINTS = 60
+SLAB_CROSS_HALF_M = 0.025
+
 
 def locate_colour_top(
     observation: Observation, colour: str, workspace: Any = None
@@ -129,6 +137,47 @@ def _top_centroid_in_base(
             "band_points": int(band.shape[0]),
         }
     return None
+
+
+#: For slab occupancy the preference inverts: the fixed scene camera's table
+#: plane is calibrated to a millimetre, while the wrist's off-nadir
+#: reconstruction warps the table itself up into the block band (58k phantom
+#: band points from one home view, found live). Masked localization tolerates
+#: that warp because a mask selects an object; a maskless slab cannot.
+SLAB_CAMERA_PREFERENCE = ("scene", "wrist")
+
+
+def _block_band_points(observation: Observation) -> tuple[np.ndarray, Optional[str]]:
+    """Base-frame depth points in the block band, from the best single camera.
+
+    No segmentation model sits in this path: occupancy is pure geometry, which
+    is the right dependency direction for a verdict. One camera testifies --
+    never a union, so one bad reconstruction cannot pollute the other's view.
+    """
+    for role in SLAB_CAMERA_PREFERENCE:
+        camera = observation.cameras.get(role)
+        if camera is None or camera.depth_m is None or camera.camera_pose is None:
+            continue
+        depth = np.asarray(camera.depth_m, dtype=np.float64)
+        points = back_project(depth, np.asarray(camera.intrinsics)).reshape(-1, 3)
+        points = points[np.isfinite(points).all(axis=1)]
+        transform = pose_to_matrix(camera.camera_pose)
+        points = points @ transform[:3, :3].T + transform[:3, 3]
+        return points[(points[:, 2] > SLAB_Z_MIN) & (points[:, 2] < SLAB_Z_MAX)], role
+    return np.zeros((0, 3)), None
+
+
+def _spot_occupied(points: np.ndarray, x: float, y: float, half_x: float, half_y: float) -> int:
+    if points.shape[0] == 0:
+        return 0
+    inside = (np.abs(points[:, 0] - x) <= half_x) & (np.abs(points[:, 1] - y) <= half_y)
+    return int(np.count_nonzero(inside))
+
+
+def _task_goal(task_name: str) -> dict[str, Any]:
+    from cap_harness.franka_real.registry import FrankaRealTaskRegistry
+
+    return dict(FrankaRealTaskRegistry().resolve(task_name).goal)
 
 
 def _xy_distance(a: dict[str, Any], b: dict[str, Any]) -> float:
@@ -221,6 +270,54 @@ def evaluate_success(
                 clear = clear and distance > MOVE_CLEAR_M
         report["clear_of_others"] = clear
         return bool(resting and clear), report
+
+    if task_name == "pick_from_clutter":
+        report["method"] = "depth_slab_occupancy"
+        goal = _task_goal(task_name)
+        target = goal["pick_target"]
+        points, witness = _block_band_points(observation)
+        count = _spot_occupied(
+            points, float(target[0]), float(target[1]), 0.040, 0.040
+        )
+        report["camera"] = witness
+        report["pick_target"] = list(target)
+        report["points_at_target"] = count
+        report["threshold"] = MIN_SLAB_POINTS
+        if witness is None:
+            report["note"] = "no camera could testify"
+            return None, report
+        # An empty band from a real camera is a measurement: nothing there.
+        return count >= MIN_SLAB_POINTS, report
+
+    if task_name == "build_wall":
+        report["method"] = "depth_slab_occupancy"
+        goal = _task_goal(task_name)
+        along_x = goal.get("wall_axis", "x") == "x"
+        start = float(goal["wall_start"])
+        fixed = float(goal["wall_fixed"])
+        pitch = float(goal["slot_pitch"])
+        along_half = pitch * 0.35
+        points, witness = _block_band_points(observation)
+        report["camera"] = witness
+        if witness is None:
+            report["note"] = "no camera could testify"
+            return None, report
+        slots: dict[str, int] = {}
+        filled = 0
+        for index in range(int(goal["slots"])):
+            centre = start + index * pitch
+            x, y = (centre, fixed) if along_x else (fixed, centre)
+            half_x = along_half if along_x else SLAB_CROSS_HALF_M
+            half_y = SLAB_CROSS_HALF_M if along_x else along_half
+            count = _spot_occupied(points, x, y, half_x, half_y)
+            slots[f"slot_{index}"] = count
+            if count >= MIN_SLAB_POINTS:
+                filled += 1
+        report["slot_points"] = slots
+        report["threshold"] = MIN_SLAB_POINTS
+        report["slots_filled"] = filled
+        report["slots_wanted"] = int(goal["slots"])
+        return filled == int(goal["slots"]), report
 
     report["method"] = "none"
     report["note"] = f"no success predicate for {task_name!r}"

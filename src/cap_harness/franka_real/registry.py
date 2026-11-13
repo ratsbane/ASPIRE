@@ -10,8 +10,8 @@ makes unattended multi-trial campaigns possible on this hardware.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 
 class FrankaRealRegistryError(ValueError):
@@ -27,6 +27,10 @@ class FrankaRealTaskMetadata:
     task_id: int = 0
     family: str = "franka_real"
     scene_reset: str = "manual"
+    #: Task-specific goal geometry (box footprint, wall slots, targets).
+    #: Programs read it through ``franka_real.get_task_metadata()["goal"]`` and
+    #: ``check_success`` reads it from the registry, so both act on one spec.
+    goal: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def suite_name(self) -> str:
@@ -39,6 +43,7 @@ class FrankaRealTaskMetadata:
     def to_manifest_record(self) -> dict[str, Any]:
         return {
             "family": self.family,
+            "goal": dict(self.goal),
             "language": self.language,
             "scene_reset": self.scene_reset,
             "suite_name": self.suite_name,
@@ -72,6 +77,39 @@ FRANKA_REAL_TASKS: tuple[FrankaRealTaskMetadata, ...] = (
         "move_red",
         "Pick up the red block and set it down on a clear patch of table.",
         scene_reset="none",
+    ),
+    FrankaRealTaskMetadata(
+        "pick_from_clutter",
+        "Pick one wooden block out of the box of loose blocks and set it on the table.",
+        scene_reset="manual",
+        # Geometry is a pre-survey PLACEHOLDER: box footprint, rim height and
+        # target must be measured with the box on the bench before motion.
+        goal={
+            "box_centre": [0.50, 0.15],
+            "box_half_extent": 0.09,
+            "box_rim_z": 0.08,
+            "pick_target": [0.34, -0.20],
+            "surveyed": False,
+        },
+    ),
+    FrankaRealTaskMetadata(
+        "build_wall",
+        "Build a wall of wooden blocks across the table, one block per slot.",
+        scene_reset="manual",
+        # Wall runs along +x (blocks end to end, long axis along the wall) so
+        # every place yaw stays near zero, well inside the proven wrist range.
+        # PLACEHOLDER until the survey session measures the box and the blocks.
+        goal={
+            "wall_axis": "x",
+            "wall_start": 0.28,
+            "wall_fixed": -0.10,
+            "slot_pitch": 0.060,
+            "slots": 5,
+            "box_centre": [0.50, 0.15],
+            "box_half_extent": 0.09,
+            "box_rim_z": 0.08,
+            "surveyed": False,
+        },
     ),
 )
 

@@ -441,7 +441,8 @@ def topdown_observation(blocks, q=HOME, bleed_ring=None):
     cam_z, f, cx, cy = 0.60, 400.0, 320.0, 240.0
     rgb = np.full((480, 640, 3), 120, dtype=np.uint8)
     depth = np.full((480, 640), cam_z - 0.017)
-    colours = {"red": (200, 40, 40), "green": (40, 200, 40), "blue": (40, 50, 200)}
+    colours = {"red": (200, 40, 40), "green": (40, 200, 40), "blue": (40, 50, 200),
+               "wood": (150, 130, 100)}  # matches no colour rule; depth-only tests
     for key, (x, y, top_z, half) in blocks.items():
         colour = key.rstrip("0123456789")  # "blue2": a second blob of the same colour
         z = cam_z - top_z  # camera x = world x - 0.45, camera y = -world y
@@ -535,6 +536,100 @@ def test_reach_home_verdict_reads_the_measured_joints():
     away = topdown_observation({}, q=HOME + 0.2)
     verdict, report = evaluate_success("reach_home", away, config)
     assert verdict is False and report["max_joint_deviation_rad"] > 0.1
+
+
+def test_clutter_tasks_carry_goal_geometry_to_programs():
+    """One source of truth: the registry's goal reaches programs through the
+    extension tool and reaches check_success through the registry."""
+    registry = FrankaRealTaskRegistry()
+    wall = registry.resolve("build_wall", 0)
+    assert wall.goal["slots"] >= 3
+    assert wall.goal["surveyed"] is False  # placeholder until the box is measured
+    assert wall.to_manifest_record()["goal"]["wall_axis"] == "x"
+    _, adapter = build()
+    adapter.reset("pick_from_clutter", 0)
+    metadata = adapter.get_task_metadata()
+    assert metadata["goal"] == dict(registry.resolve("pick_from_clutter", 0).goal)
+
+
+def test_clutter_example_programs_pass_the_sandbox_validator():
+    import ast
+    from pathlib import Path
+
+    from cap_harness.runtime import _ProgramValidator
+
+    examples = Path(__file__).resolve().parent.parent / "examples" / "franka_real"
+    for name in ("pick_from_clutter", "build_wall"):
+        source = (examples / name / f"{name}.py").read_text()
+        _ProgramValidator().visit(ast.parse(source))  # raises on a violation
+
+
+def test_build_wall_verdict_counts_depth_slab_occupancy():
+    from cap_harness.franka_real.success import evaluate_success
+
+    goal = FrankaRealTaskRegistry().resolve("build_wall", 0).goal
+    config = FrankaStationConfig()
+    blocks = {
+        f"wood{index}": (goal["wall_start"] + index * goal["slot_pitch"],
+                         goal["wall_fixed"], 0.044, 0.022)
+        for index in range(goal["slots"])
+    }
+    verdict, report = evaluate_success("build_wall", topdown_observation(blocks), config)
+    assert verdict is True, report
+    assert report["slots_filled"] == goal["slots"]
+
+    gap = dict(blocks)
+    gap.pop("wood2")
+    verdict, report = evaluate_success("build_wall", topdown_observation(gap), config)
+    assert verdict is False
+    assert report["slot_points"]["slot_2"] < report["threshold"]
+    assert report["slots_filled"] == goal["slots"] - 1
+
+
+def test_pick_from_clutter_verdict_wants_a_block_at_the_target():
+    from cap_harness.franka_real.success import evaluate_success
+
+    goal = FrankaRealTaskRegistry().resolve("pick_from_clutter", 0).goal
+    config = FrankaStationConfig()
+    tx, ty = goal["pick_target"]
+    placed = topdown_observation({"wood": (tx, ty, 0.044, 0.022)})
+    verdict, report = evaluate_success("pick_from_clutter", placed, config)
+    assert verdict is True, report
+
+    elsewhere = topdown_observation({"wood": (0.55, 0.25, 0.044, 0.022)})
+    verdict, report = evaluate_success("pick_from_clutter", elsewhere, config)
+    assert verdict is False
+    assert report["points_at_target"] < report["threshold"]
+
+
+def test_slab_verdict_prefers_the_scene_camera_over_a_warped_wrist_view():
+    """Live phantom: the wrist's off-nadir reconstruction lifted the table
+    itself into the block band (58k band points, 92 'at' an empty target).
+    With a scene camera present, the slab predicate must believe it alone."""
+    from cap_harness.contracts import Observation
+    from cap_harness.franka_real.success import evaluate_success
+
+    goal = FrankaRealTaskRegistry().resolve("pick_from_clutter", 0).goal
+    tx, ty = goal["pick_target"]
+    # The wrist sees a warped-table patch in the band exactly at the target...
+    warped_wrist = topdown_observation({"wood": (tx, ty, 0.035, 0.04)})
+    # ...while the calibrated scene camera sees a genuinely empty target.
+    clean_scene = topdown_observation({})
+    both = Observation(
+        cameras={
+            "wrist": warped_wrist.cameras["wrist"],
+            "scene": clean_scene.cameras["wrist"],
+        },
+        robot_state=bench_state(),
+    )
+    config = FrankaStationConfig()
+    verdict, report = evaluate_success("pick_from_clutter", both, config)
+    assert verdict is False, report
+    assert report["camera"] == "scene"
+    # Without a scene camera the wrist still testifies (and is fooled): that
+    # fallback is the documented cost of a one-camera station.
+    verdict, report = evaluate_success("pick_from_clutter", warped_wrist, config)
+    assert verdict is True and report["camera"] == "wrist"
 
 
 def test_check_success_files_its_evidence_with_the_run(tmp_path):
