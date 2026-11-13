@@ -12,8 +12,14 @@ MAX_ATTEMPTS = 3
 goal = franka_real.get_task_metadata()["goal"]
 BOX = [float(v) for v in goal["box_centre"]]
 BOX_HALF = float(goal["box_half_extent"])
+BOX_X = [float(v) for v in goal["box_x"]]  # measured wall lines, not a square
+BOX_Y = [float(v) for v in goal["box_y"]]
 TARGET = [float(v) for v in goal["pick_target"]]
 SAFE_Z = max(float(goal["box_rim_z"]) + 0.06, 0.14)  # clears the box rim
+# Hand envelope half-spans at grasp depth: along the finger-closing axis the
+# open fingers span wide; along the block's long axis the hand body is slim.
+HAND_CLOSE_HALF = 0.060
+HAND_ALONG_HALF = 0.040
 
 FAILED_MOVE = {"stage": None}
 
@@ -76,6 +82,23 @@ def in_box(block):
             and abs(block["y"] - BOX[1]) <= BOX_HALF + 0.02)
 
 
+def wall_clear(block):
+    """Whether the descending hand clears the basket walls at this grasp.
+
+    Live lesson: a grasp 9 mm from the east wall drove the hand into the rim
+    and fired the cartesian reflex. The fingers close across the block's long
+    axis, so the wide span points along closing and the slim hand body along
+    the block; a block the envelope cannot clear is unpickable by vertical
+    descend and is excluded, not attempted."""
+    yaw = box_yaw(block["geometry"])
+    need_x = (abs(math.sin(yaw)) * HAND_CLOSE_HALF
+              + abs(math.cos(yaw)) * HAND_ALONG_HALF)
+    need_y = (abs(math.cos(yaw)) * HAND_CLOSE_HALF
+              + abs(math.sin(yaw)) * HAND_ALONG_HALF)
+    return (block["x"] - BOX_X[0] >= need_x and BOX_X[1] - block["x"] >= need_x
+            and block["y"] - BOX_Y[0] >= need_y and BOX_Y[1] - block["y"] >= need_y)
+
+
 def choose(blocks):
     """Highest top face wins; among all, prefer one with finger clearance."""
     ordered = sorted(blocks, key=lambda b: -b["top"])
@@ -100,7 +123,12 @@ while attempt < MAX_ATTEMPTS and held_block is None and not aborted:
         result = {"ok": False, "stage": "find", "attempt": attempt,
                   "note": "no block candidates in the box"}
         break
-    pick = choose(blocks)
+    pickable = [b for b in blocks if wall_clear(b)]
+    if not pickable:
+        result = {"ok": False, "stage": "find", "attempt": attempt,
+                  "note": "all candidates hug the basket wall"}
+        break
+    pick = choose(pickable)
     quat = down_quat(box_yaw(pick["geometry"]))
     grasp_z = max(pick["top"] - GRASP_OFFSET, TABLE_Z + 0.008)
     open_gripper()

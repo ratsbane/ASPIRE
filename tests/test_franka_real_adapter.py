@@ -657,6 +657,12 @@ def test_clutter_tasks_carry_goal_geometry_to_programs():
     assert wall.goal["slots"] >= 3
     assert wall.goal["surveyed"] is True  # measured 2026-11-13, no longer placeholder
     assert wall.to_manifest_record()["goal"]["wall_axis"] == "x"
+    # The measured wall lines, not just the square footprint: programs need
+    # them for hand clearance (the rim bump of 2026-11-13).
+    for name in ("pick_from_clutter", "build_wall"):
+        goal = registry.resolve(name, 0).goal
+        assert goal["box_x"][0] < goal["box_x"][1]
+        assert goal["box_y"][0] < goal["box_y"][1]
     _, adapter = build()
     adapter.reset("pick_from_clutter", 0)
     metadata = adapter.get_task_metadata()

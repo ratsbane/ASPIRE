@@ -19,8 +19,11 @@ inside the proven wrist range; a block's long axis lies along the wall. Picks
 follow the clutter policy (see the pick_from_clutter context): segment
 "wooden block" instances yourself, back-project with an explicit `"base"`
 target frame, reject candidates outside the box or with implausible extents,
-take the highest top face with finger clearance, and always lift straight
-back above the rim before moving laterally.
+exclude blocks the hand envelope cannot clear from the measured wall lines
+(`box_x`/`box_y` -- bumping the rim fires the cartesian reflex), take the
+highest top face with finger clearance, and always lift straight back above
+the rim before moving laterally. When only wall-huggers remain, stop and
+report `wall_blocked`: a partial wall beats a bumped basket.
 
 ## Build policy
 

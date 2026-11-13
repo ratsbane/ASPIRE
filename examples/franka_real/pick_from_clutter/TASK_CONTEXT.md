@@ -26,15 +26,22 @@ for one block.
 ## Pick policy
 
 1. Survey from above the box centre, high enough to clear the rim.
-2. Choose the candidate with the **highest top face**; among near-equals,
+2. Exclude candidates the hand cannot reach: the goal's `box_x`/`box_y` are
+   the measured wall lines, and the descending hand needs clearance from
+   them -- wide along the finger-closing axis (fingers open past the block),
+   slim along the block's long axis. A grasp 9 mm from the east wall drove
+   the hand into the rim and fired the cartesian reflex, live. A block the
+   envelope cannot clear is unpickable by vertical descend: skip it and say
+   so rather than bump the basket.
+3. Choose the candidate with the **highest top face**; among near-equals,
    prefer one whose neighbours are at least 0.035 m away in xy (finger
    clearance). Topmost-first also un-clutters the box with every pick.
-3. Hover above the rim, descend vertically to the block's measured top minus
+4. Hover above the rim, descend vertically to the block's measured top minus
    0.017 m, close, and lift straight back above the rim before any lateral
    motion -- the box walls are obstacles the workspace guard does not know.
-4. A close on air means the block was shoved: open, re-survey, re-choose, at
+5. A close on air means the block was shoved: open, re-survey, re-choose, at
    most three attempts.
-5. Carry high, place at a height that preserves the held block's bottom
+6. Carry high, place at a height that preserves the held block's bottom
    clearance: the scan's footprint says how the block hangs (a footprint
    showing the long ~55 mm side lies flat, 28 mm tall in hand; a narrower
    footprint stands on end, 55 mm tall), and lowering a standing block to

@@ -83,12 +83,17 @@ FRANKA_REAL_TASKS: tuple[FrankaRealTaskMetadata, ...] = (
         "Pick one wooden block out of the box of loose blocks and set it on the table.",
         scene_reset="manual",
         # Surveyed 2026-11-13 (no motion): mesh basket measured from the wrist
-        # depth cloud (walls x 0.36-0.51, y 0.10-0.36, rim z ~0.10; SAM3 found
-        # five block instances inside at tops 0.055-0.066). The basket's far
-        # side nears the workspace y limit; blocks were all seen at y <= 0.29.
+        # depth cloud (SAM3 found five block instances inside at tops
+        # 0.055-0.066). The basket's far side nears the workspace y limit;
+        # blocks were all seen at y <= 0.29. box_x/box_y are the measured wall
+        # lines: picks need hand clearance from them (a grasp 9 mm from the
+        # east wall drove the hand into the rim and fired the cartesian
+        # reflex, live), and the square half-extent is too coarse for that.
         goal={
             "box_centre": [0.44, 0.23],
             "box_half_extent": 0.11,
+            "box_x": [0.36, 0.51],
+            "box_y": [0.10, 0.36],
             "box_rim_z": 0.10,
             "pick_target": [0.34, -0.20],
             "surveyed": True,
@@ -111,6 +116,8 @@ FRANKA_REAL_TASKS: tuple[FrankaRealTaskMetadata, ...] = (
             "slots": 5,
             "box_centre": [0.44, 0.23],
             "box_half_extent": 0.11,
+            "box_x": [0.36, 0.51],
+            "box_y": [0.10, 0.36],
             "box_rim_z": 0.10,
             "surveyed": True,
         },

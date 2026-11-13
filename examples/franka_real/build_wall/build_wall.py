@@ -12,7 +12,11 @@ GRASP_TRIES_PER_SLOT = 2
 goal = franka_real.get_task_metadata()["goal"]
 BOX = [float(v) for v in goal["box_centre"]]
 BOX_HALF = float(goal["box_half_extent"])
+BOX_X = [float(v) for v in goal["box_x"]]  # measured wall lines, not a square
+BOX_Y = [float(v) for v in goal["box_y"]]
 SAFE_Z = max(float(goal["box_rim_z"]) + 0.06, 0.14)
+HAND_CLOSE_HALF = 0.060
+HAND_ALONG_HALF = 0.040
 ALONG_X = goal.get("wall_axis", "x") == "x"
 WALL_START = float(goal["wall_start"])
 WALL_FIXED = float(goal["wall_fixed"])
@@ -84,6 +88,19 @@ def in_box(block):
             and abs(block["y"] - BOX[1]) <= BOX_HALF + 0.02)
 
 
+def wall_clear(block):
+    """The descending hand must clear the basket walls (live: a grasp 9 mm
+    from the east wall drove the hand into the rim and fired the reflex).
+    Wide span along the finger-closing axis, slim along the block."""
+    yaw = box_yaw(block["geometry"])
+    need_x = (abs(math.sin(yaw)) * HAND_CLOSE_HALF
+              + abs(math.cos(yaw)) * HAND_ALONG_HALF)
+    need_y = (abs(math.cos(yaw)) * HAND_CLOSE_HALF
+              + abs(math.sin(yaw)) * HAND_ALONG_HALF)
+    return (block["x"] - BOX_X[0] >= need_x and BOX_X[1] - block["x"] >= need_x
+            and block["y"] - BOX_Y[0] >= need_y and BOX_Y[1] - block["y"] >= need_y)
+
+
 def choose(blocks):
     """The wall wants blocks lying flat; among those, highest clear top wins.
 
@@ -113,7 +130,10 @@ def pick_one():
         blocks = [b for b in scan() if in_box(b)]
         if not blocks:
             return "empty", 0.0, None
-        pick = choose(blocks)
+        pickable = [b for b in blocks if wall_clear(b)]
+        if not pickable:
+            return "wall_blocked", 0.0, None
+        pick = choose(pickable)
         quat = down_quat(box_yaw(pick["geometry"]))
         grasp_z = max(pick["top"] - GRASP_OFFSET, TABLE_Z + 0.008)
         open_gripper()
@@ -146,6 +166,11 @@ for index in range(SLOTS):
     if picked == "empty":
         status = "box_empty"
         slots_report.append({"slot": index, "ok": False, "note": "box empty"})
+        break
+    if picked == "wall_blocked":
+        status = "wall_blocked"
+        slots_report.append({"slot": index, "ok": False,
+                             "note": "remaining blocks hug the basket wall"})
         break
     if picked in ("aborted", "failed"):
         status = picked
