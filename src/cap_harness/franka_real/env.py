@@ -119,8 +119,14 @@ class RealFrankaEnv:
             raise ValueError(refusal)
         factor = float(speed_factor if speed_factor is not None else self.config.speed_factor)
         started = time.monotonic()
-        self._panda.move_to_joints([row for row in points], speed_factor=factor)
+        converged = bool(
+            self._panda.move_to_joint_position([row for row in points], speed_factor=factor)
+        )
         self.motions_executed += 1
+        if not converged:
+            raise RuntimeError(
+                "the motion generator reported non-convergence at the final waypoint"
+            )
         return {
             "waypoints": int(points.shape[0]),
             "speed_factor": factor,

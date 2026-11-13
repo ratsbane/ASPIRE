@@ -53,9 +53,10 @@ class FakePanda:
     def get_state(self):
         return FakeState(self.q)
 
-    def move_to_joints(self, waypoints, speed_factor=0.1):
+    def move_to_joint_position(self, waypoints, speed_factor=0.1):
         self.batches.append((np.asarray(waypoints, dtype=np.float64), speed_factor))
         self.q = np.asarray(waypoints, dtype=np.float64).reshape(-1, ARM_DOF)[-1]
+        return True
 
 
 class FakeGripperState:
