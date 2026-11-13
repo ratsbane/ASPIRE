@@ -41,6 +41,10 @@ yam-real = [
 yam-real-server = [
   "damiao-motor>=1.0.7b1",
 ]
+franka-real = [
+  "panda-python>=0.8",
+  "pyrealsense2>=2.55",
+]
 libero = [
   "gymnasium>=0.29",
   "imageio[ffmpeg]>=2.34",

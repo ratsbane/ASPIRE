@@ -78,13 +78,17 @@ def run_program(
     init_mode: str = "saved",
     flat_layout: bool = False,
     capture_videos: bool = True,
-    station: str = "yam-example",
+    station: str | None = None,
     station_config_root: Path | None = None,
     allow_motion: bool = False,
 ) -> RunOutcome:
     """Run an episode, using its task horizon when max_steps is not supplied."""
-    if benchmark not in {"behavior", "libero-pro", "robosuite", "yam_real"}:
-        raise ValueError("benchmark must be behavior, libero-pro, robosuite, or yam_real")
+    if benchmark not in {"behavior", "franka_real", "libero-pro", "robosuite", "yam_real"}:
+        raise ValueError(
+            "benchmark must be behavior, franka_real, libero-pro, robosuite, or yam_real"
+        )
+    if station is None:
+        station = "franka-bench" if benchmark == "franka_real" else "yam-example"
     if init_mode not in {"saved", "seeded"}:
         raise ValueError("init_mode must be 'saved' or 'seeded'")
     if init_mode != "saved" and benchmark != "libero-pro":
@@ -122,6 +126,15 @@ def run_program(
         metadata = registry.resolve(suite, task_id)
         adapter_type = YamRealAdapter
         extension_allowlist = YAM_REAL_PUBLIC_TOOL_NAMES
+    elif benchmark == "franka_real":
+        from .franka_real.adapter import FrankaRealAdapter
+        from .franka_real.registry import FrankaRealTaskRegistry
+        from .registry import FRANKA_REAL_PUBLIC_TOOL_NAMES
+
+        registry = FrankaRealTaskRegistry()
+        metadata = registry.resolve(suite, task_id)
+        adapter_type = FrankaRealAdapter
+        extension_allowlist = FRANKA_REAL_PUBLIC_TOOL_NAMES
     else:
         from cap_harness.registry import ROBOSUITE_PUBLIC_TOOL_NAMES
         from cap_harness.robosuite.adapter import RobosuiteAdapter
@@ -143,6 +156,16 @@ def run_program(
             "ik": ("curobo",),
             "trajectory_planning": ("interpolation", "curobo"),
             "pose_planning": ("curobo-integrated",),
+        }
+    elif benchmark == "franka_real":
+        # IK is panda_py's in-process analytical solver; trajectories are the
+        # shared joint interpolation retimed by the Franka motion generator.
+        provider_capabilities = {
+            "segmentation": "sam3",
+            "grasping": ("contact-graspnet",),
+            "ik": ("franka",),
+            "trajectory_planning": ("interpolation",),
+            "pose_planning": ("composed",),
         }
     else:
         provider_capabilities = {
@@ -255,6 +278,16 @@ def run_program(
                     allow_physical_motion=allow_motion,
                 )
                 recorder.frequency = adapter.control_frequency
+            elif benchmark == "franka_real":
+                from .franka_real.station import build_real_station as build_franka_station
+
+                adapter = adapter_type(
+                    build_franka_station(station, config_root=station_config_root),
+                    registry=registry,
+                    run_observer=recorder,
+                    allow_physical_motion=allow_motion,
+                )
+                recorder.frequency = adapter.control_frequency
             else:
                 adapter = adapter_type(**adapter_kwargs)
         with recorder.timing.measure("reset"):
@@ -315,6 +348,19 @@ def run_program(
                     trajectory_planner="curobo",
                     pose_planner="curobo-integrated",
                 ),
+                recorder=recorder,
+            )
+        elif benchmark == "franka_real":
+            from .contracts import MotionStrategy
+            from .providers.franka_kinematics import FrankaIKProvider
+
+            api = CapApi(
+                adapter,
+                segmentation_provider=segmentation,
+                grasp_providers={"contact-graspnet": contact_graspnet},
+                ik_providers={"franka": TracedProvider(FrankaIKProvider(), recorder, "franka")},
+                default_camera=adapter.native_env.config.camera.role,
+                default_motion_strategy=MotionStrategy(ik_solver="franka"),
                 recorder=recorder,
             )
         else:

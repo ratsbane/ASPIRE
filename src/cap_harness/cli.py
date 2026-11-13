@@ -141,15 +141,21 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="execute and record one Code-as-Policy episode")
     run.add_argument(
         "--benchmark",
-        choices=("behavior", "libero-pro", "robosuite", "yam_real"),
+        choices=("behavior", "franka_real", "libero-pro", "robosuite", "yam_real"),
         default="libero-pro",
     )
     run.add_argument("--suite", required=True)
-    run.add_argument("--station", default="yam-example", help="YAM station profile identifier")
     run.add_argument(
-        "--station-config-root", type=Path, help="Custom YAM station profiles directory"
+        "--station",
+        default=None,
+        help="Hardware station profile identifier (defaults per benchmark)",
     )
-    run.add_argument("--allow-motion", action="store_true", help="Enable physical YAM commands")
+    run.add_argument(
+        "--station-config-root", type=Path, help="Custom station profiles directory"
+    )
+    run.add_argument(
+        "--allow-motion", action="store_true", help="Enable physical robot commands"
+    )
     run.add_argument("--task-id", type=int, required=True)
     run.add_argument("--seed", type=int, default=1)
     run.add_argument("--program", type=Path, required=True)

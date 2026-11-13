@@ -75,8 +75,13 @@ YAM_REAL_PUBLIC_TOOL_NAMES = frozenset(
     {"yam_real.get_task_metadata", "yam_real.get_controller_metadata"}
 )
 
+FRANKA_REAL_PUBLIC_TOOL_NAMES = frozenset(
+    {"franka_real.get_task_metadata", "franka_real.get_controller_metadata"}
+)
+
 _APPROVED_EMBODIMENT_PREFIXES = (
     "behavior.",
+    "franka_real.",
     "yam_real.",
     "libero.",
     "robosuite.",
@@ -365,6 +370,7 @@ class ToolRegistry:
 
 __all__ = [
     "BEHAVIOR_PUBLIC_TOOL_NAMES",
+    "FRANKA_REAL_PUBLIC_TOOL_NAMES",
     "DEFAULT_LIBERO_PUBLIC_ALLOWLIST",
     "LIBERO_PUBLIC_TOOL_NAMES",
     "ROBOSUITE_PUBLIC_TOOL_NAMES",
