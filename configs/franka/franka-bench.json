@@ -6,15 +6,15 @@
   "serial": "938422073914",
   "fps": 15,
   "pose_position": [
-   0.8546,
-   -0.1076,
-   0.2815
+   0.842,
+   -0.0715,
+   0.2564
   ],
   "pose_quaternion_wxyz": [
-   0.37356,
-   -0.617995,
-   -0.565107,
-   0.398986
+   0.321313,
+   -0.59311,
+   -0.625147,
+   0.392646
   ],
   "calibrated": "plane+landmark solve; see scene_calibration.py"
  }

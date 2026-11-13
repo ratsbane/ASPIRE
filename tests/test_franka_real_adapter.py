@@ -387,6 +387,45 @@ def test_scene_pose_solver_recovers_a_known_camera():
     assert abs(report["table_z_residual_mm"]) < 0.01
 
 
+def test_calibration_landmark_rejects_the_robot_base_leds():
+    """Live failure 2026-11-13: the base column's blue LED strips out-pixelled
+    the real blue block and dragged the solve 146 mm off. A landmark blob must
+    stand above the table plane, however many pixels it has."""
+    from cap_harness.franka_real.scene_calibration import colour_top_centroid
+
+    # Camera looking straight down from 0.5 m; plane normal toward the camera.
+    plane = (np.array([0.0, 0.0, -1.0]), 0.5)
+    depth = np.full((60, 80), 0.5)
+    rgb = np.full((60, 80, 3), 160, dtype=np.uint8)
+    blue = (40, 50, 200)
+    # LED glow: the biggest blue blob, depth at the plane (zero raise).
+    rgb[0:10, 0:60] = blue
+    # The real block: smaller, its whole blob 0.06 m above the plane.
+    rgb[25:40, 30:45] = blue
+    depth[25:40, 30:45] = 0.44
+    columns, rows_idx = np.meshgrid(np.arange(80), np.arange(60))
+    points = np.dstack([
+        (columns - 40) * depth / 100.0,
+        (rows_idx - 30) * depth / 100.0,
+        depth,
+    ])
+
+    centroid = colour_top_centroid(rgb, points, "blue", plane)
+    raise_m = float(centroid @ plane[0] + plane[1])
+    assert 0.05 < raise_m < 0.07  # the block's top, not the glow
+
+    # With only the glow in view the solve must refuse, not guess.
+    rgb[25:40, 30:45] = 160
+    depth[25:40, 30:45] = 0.5
+    points = np.dstack([
+        (columns - 40) * depth / 100.0,
+        (rows_idx - 30) * depth / 100.0,
+        depth,
+    ])
+    with pytest.raises(ValueError, match="no plausible blue block"):
+        colour_top_centroid(rgb, points, "blue", plane)
+
+
 def test_station_profile_round_trips_a_scene_camera(tmp_path):
     import json
 

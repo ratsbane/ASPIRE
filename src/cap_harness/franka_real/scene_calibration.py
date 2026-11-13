@@ -35,6 +35,12 @@ from cap_harness.providers.colorblob import MIN_COMPONENT_PX, _RULES
 
 TOP_BAND_M = 0.012
 MIN_PLANE_POINTS = 5000
+#: A real block raises its whole blob above the table; glow and reflections
+#: hug the plane. Median blob height must clear this to count as a block.
+BLOCK_MIN_RAISE_M = 0.015
+#: A block top sits within this band above the plane (one or two courses).
+BLOCK_TOP_RANGE_M = (0.025, 0.12)
+MAX_RANKED_COMPONENTS = 5
 
 
 def back_project(depth_m: np.ndarray, intrinsics: np.ndarray) -> np.ndarray:
@@ -80,7 +86,14 @@ def colour_top_centroid(
     colour: str,
     plane: tuple[np.ndarray, float],
 ) -> np.ndarray:
-    """Camera-frame centroid of the colour's highest face."""
+    """Camera-frame centroid of the colour's highest plausible block face.
+
+    Components are ranked by size but size alone does not win: the robot
+    base's blue LED strips can out-pixel the real blue block, and their
+    depth lands at the base surface, hugging the table plane. A landmark
+    block raises its whole blob well above the plane and its top sits in
+    block range, so anything else is rejected, however big.
+    """
     from scipy import ndimage
 
     normal, offset = plane
@@ -91,14 +104,28 @@ def colour_top_centroid(
     if count == 0:
         raise ValueError(f"no {colour} region in the scene view")
     sizes = ndimage.sum_labels(np.ones_like(labels), labels, index=range(1, count + 1))
-    biggest = int(np.argmax(sizes)) + 1
-    if sizes[biggest - 1] < MIN_COMPONENT_PX:
-        raise ValueError(f"largest {colour} region is only {int(sizes[biggest - 1])} px")
-    blob = points[labels == biggest]
-    # Height above the plane, positive toward the camera side (up).
-    height = blob @ normal + offset
-    top = blob[height > float(height.max()) - TOP_BAND_M]
-    return top.mean(axis=0)
+    rejected = []
+    for index in np.argsort(sizes)[::-1][:MAX_RANKED_COMPONENTS]:
+        if sizes[index] < MIN_COMPONENT_PX:
+            break
+        blob = points[labels == int(index) + 1]
+        # Height above the plane, positive toward the camera side (up).
+        height = blob @ normal + offset
+        top_height = float(height.max())
+        if (
+            float(np.median(height)) < BLOCK_MIN_RAISE_M
+            or not BLOCK_TOP_RANGE_M[0] <= top_height <= BLOCK_TOP_RANGE_M[1]
+        ):
+            rejected.append(
+                f"{int(sizes[index])} px (median {float(np.median(height)):.3f},"
+                f" top {top_height:.3f} above plane)"
+            )
+            continue
+        top = blob[height > top_height - TOP_BAND_M]
+        return top.mean(axis=0)
+    raise ValueError(
+        f"no plausible {colour} block; rejected: {'; '.join(rejected) or 'none'}"
+    )
 
 
 def solve_pose(
