@@ -82,14 +82,16 @@ FRANKA_REAL_TASKS: tuple[FrankaRealTaskMetadata, ...] = (
         "pick_from_clutter",
         "Pick one wooden block out of the box of loose blocks and set it on the table.",
         scene_reset="manual",
-        # Geometry is a pre-survey PLACEHOLDER: box footprint, rim height and
-        # target must be measured with the box on the bench before motion.
+        # Surveyed 2026-11-13 (no motion): mesh basket measured from the wrist
+        # depth cloud (walls x 0.36-0.51, y 0.10-0.36, rim z ~0.10; SAM3 found
+        # five block instances inside at tops 0.055-0.066). The basket's far
+        # side nears the workspace y limit; blocks were all seen at y <= 0.29.
         goal={
-            "box_centre": [0.50, 0.15],
-            "box_half_extent": 0.09,
-            "box_rim_z": 0.08,
+            "box_centre": [0.44, 0.23],
+            "box_half_extent": 0.11,
+            "box_rim_z": 0.10,
             "pick_target": [0.34, -0.20],
-            "surveyed": False,
+            "surveyed": True,
         },
     ),
     FrankaRealTaskMetadata(
@@ -98,17 +100,19 @@ FRANKA_REAL_TASKS: tuple[FrankaRealTaskMetadata, ...] = (
         scene_reset="manual",
         # Wall runs along +x (blocks end to end, long axis along the wall) so
         # every place yaw stays near zero, well inside the proven wrist range.
-        # PLACEHOLDER until the survey session measures the box and the blocks.
+        # Surveyed 2026-11-13: box as in pick_from_clutter; the wall line sits
+        # at y=-0.12, clear of the standing red block (-0.062) and the pile
+        # (-0.156) by more than the slab's cross window.
         goal={
             "wall_axis": "x",
             "wall_start": 0.28,
-            "wall_fixed": -0.10,
+            "wall_fixed": -0.12,
             "slot_pitch": 0.060,
             "slots": 5,
-            "box_centre": [0.50, 0.15],
-            "box_half_extent": 0.09,
-            "box_rim_z": 0.08,
-            "surveyed": False,
+            "box_centre": [0.44, 0.23],
+            "box_half_extent": 0.11,
+            "box_rim_z": 0.10,
+            "surveyed": True,
         },
     ),
 )

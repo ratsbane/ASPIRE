@@ -544,7 +544,7 @@ def test_clutter_tasks_carry_goal_geometry_to_programs():
     registry = FrankaRealTaskRegistry()
     wall = registry.resolve("build_wall", 0)
     assert wall.goal["slots"] >= 3
-    assert wall.goal["surveyed"] is False  # placeholder until the box is measured
+    assert wall.goal["surveyed"] is True  # measured 2026-11-13, no longer placeholder
     assert wall.to_manifest_record()["goal"]["wall_axis"] == "x"
     _, adapter = build()
     adapter.reset("pick_from_clutter", 0)
