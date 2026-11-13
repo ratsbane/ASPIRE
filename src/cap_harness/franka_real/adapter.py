@@ -46,6 +46,7 @@ from cap_harness.geometry import matrix_to_pose, pose_to_matrix
 EMBODIMENT = "franka_real"
 ARM = "primary"
 BASE_FRAME = "base"
+CAMERA_FRAME = "wrist_camera"
 JOINT_NAMES = tuple(f"panda_joint{index + 1}" for index in range(ARM_DOF))
 CAMERA_WAIT_S = 2.0
 
@@ -182,12 +183,16 @@ class FrankaRealAdapter:
                 "requires one, and a silent placeholder would be mistaken for a scene"
             )
         ee = pose_to_matrix(state.end_effector_poses[ARM])
+        # `frame` names the camera's own optical frame; `camera_pose` maps it
+        # into the base frame, which is what lets mask back-projection land in
+        # world coordinates. Setting both to the base frame silently skips the
+        # transform and hands back camera-frame points labelled "base".
         camera_pose = matrix_to_pose(ee @ self._hand_eye, frame=BASE_FRAME)
         camera = CameraObservation(
             rgb=frame.rgb,
             depth_m=frame.depth_m,
             intrinsics=frame.intrinsics,
-            frame=BASE_FRAME,
+            frame=CAMERA_FRAME,
             camera_pose=camera_pose,
             timestamp_s=frame.timestamp_s,
         )

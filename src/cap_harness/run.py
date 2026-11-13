@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+import requests
+
 from .api import CapApi
 from .artifacts import RunRecorder, StepLimitReached, TracedProvider, redact
 from .libero.adapter import LiberoAdapter
@@ -160,8 +162,19 @@ def run_program(
     elif benchmark == "franka_real":
         # IK is panda_py's in-process analytical solver; trajectories are the
         # shared joint interpolation retimed by the Franka motion generator.
+        # Segmentation prefers a reachable SAM3 service and otherwise falls
+        # back to the in-process colour-blob provider, and the run records
+        # which one actually produced its masks.
+        franka_segmentation = "sam3"
+        try:
+            requests.get(
+                os.environ.get("CAP_HARNESS_SAM3_URL", DEFAULT_SAM3_URL) + "/health",
+                timeout=1.0,
+            )
+        except Exception:
+            franka_segmentation = "colorblob"
         provider_capabilities = {
-            "segmentation": "sam3",
+            "segmentation": franka_segmentation,
             "grasping": ("contact-graspnet",),
             "ik": ("franka",),
             "trajectory_planning": ("interpolation",),
@@ -354,6 +367,12 @@ def run_program(
             from .contracts import MotionStrategy
             from .providers.franka_kinematics import FrankaIKProvider
 
+            if franka_segmentation == "colorblob":
+                from .providers.colorblob import ColorBlobSegmentationProvider
+
+                segmentation = TracedProvider(
+                    ColorBlobSegmentationProvider(), recorder, "colorblob"
+                )
             api = CapApi(
                 adapter,
                 segmentation_provider=segmentation,

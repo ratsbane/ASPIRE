@@ -34,8 +34,11 @@ class FrankaCameraConfig:
     role: str = "wrist"
     resolution: tuple[int, int] = (640, 480)
     fps: int = 30
-    hand_eye_position: tuple[float, float, float] = (0.067, 0.0, -0.055)
-    """Camera origin in the EE frame, metres. Derived, see module docstring."""
+    hand_eye_position: tuple[float, float, float] = (-0.0595, -0.0087, -0.0537)
+    """Camera origin in the EE frame, metres: the x/y come from the bench's
+    planar camera map (its offset vector is the camera's nadir displacement
+    from the TCP), the z from a measured table depth at a known TCP height.
+    Derived, see module docstring; refine by touch, not trust."""
 
     hand_eye_quaternion_wxyz: tuple[float, float, float, float] = (
         0.7071068,

@@ -113,7 +113,10 @@ def test_observation_carries_a_posed_wrist_camera():
     observation = adapter.get_observation()
     assert set(observation.cameras) == {"wrist"}
     camera = observation.cameras["wrist"]
-    assert camera.frame == "base"
+    # The camera's own optical frame is named; its pose maps it to base. Both
+    # set to "base" would silently skip point-cloud transforms (found live).
+    assert camera.frame == "wrist_camera"
+    assert camera.camera_pose.frame == "base"
     # The camera rides the hand: its pose must sit near the FK answer for the hand.
     hand = adapter.get_robot_state().end_effector_poses["primary"].position
     assert np.linalg.norm(camera.camera_pose.position - hand) < 0.15
@@ -239,3 +242,34 @@ def test_ik_provider_round_trips_through_the_same_fk():
     refused = provider.solve_ik(unreachable, state)
     assert refused.ok is False
     assert refused.error.code in (ErrorCode.IK_UNREACHABLE, ErrorCode.IK_FAILED)
+
+
+def test_colorblob_provider_segments_a_blue_region():
+    from cap_harness.providers.colorblob import ColorBlobSegmentationProvider
+    from cap_harness.contracts import CameraObservation, Pose
+
+    rgb = np.full((60, 80, 3), 120, dtype=np.uint8)
+    rgb[20:40, 30:60] = (40, 50, 200)   # a blue patch, 600 px
+    camera = CameraObservation(
+        rgb=rgb,
+        depth_m=np.full((60, 80), 0.5),
+        intrinsics=np.array([[100.0, 0, 40], [0, 100.0, 30], [0, 0, 1]]),
+        frame="base",
+        camera_pose=Pose(
+            position=np.zeros(3),
+            quaternion_wxyz=np.array([1.0, 0, 0, 0]),
+            frame="base",
+        ),
+    )
+    provider = ColorBlobSegmentationProvider()
+    found = provider.segment_text(camera, "blue block")
+    assert found.ok is True
+    mask = found.segmentations[0].mask
+    assert mask[30, 45] and not mask[5, 5]
+    assert found.segmentations[0].score <= 0.8  # a heuristic never claims certainty
+
+    missing = provider.segment_text(camera, "red block")
+    assert missing.ok is False
+
+    unknown = provider.segment_text(camera, "the mug")
+    assert unknown.ok is False
