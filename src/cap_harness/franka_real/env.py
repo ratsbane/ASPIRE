@@ -51,6 +51,7 @@ class RealFrankaEnv:
         self._scene_camera = scene_camera
         self._fk = fk
         self._closed = False
+        self._gripper_holding = False
         self.motions_executed = 0
         """Count of waypoint batches actually sent to the arm, for provenance."""
 
@@ -162,7 +163,32 @@ class RealFrankaEnv:
         """
         width = float(np.clip(width_m, 0.0, self.config.gripper_max_width_m))
         current = float(self._gripper.read_once().width)
+        if abs(width - current) < 0.002:
+            # Commanding the width the fingers already hold is a no-op, and it
+            # must be one: planned trajectories carry per-waypoint gripper
+            # values, and re-commanding the held width after a carry made
+            # libfranka fail the whole, otherwise successful, motion
+            # ("libfranka gripper: Command failed!" while gripping a block).
+            return {
+                "commanded_width_m": round(width, 4),
+                "measured_width_m": round(current, 4),
+                "ok": True,
+                "noop": "already at width",
+            }
         if width < current - 1e-4:
+            if self._gripper_holding:
+                # The fingers are already force-closed on something (they
+                # stopped above the commanded width). Planned trajectories
+                # re-assert the program's last close command after every
+                # motion, and libfranka rejects a fresh grasp mid-grip
+                # ("libfranka gripper: Command failed!"); physically there is
+                # nothing to do, so this holds the verdict a grasp would want.
+                return {
+                    "commanded_width_m": round(width, 4),
+                    "measured_width_m": round(current, 4),
+                    "ok": True,
+                    "noop": "already grasping",
+                }
             grasped = bool(
                 self._gripper.grasp(
                     width,
@@ -172,8 +198,10 @@ class RealFrankaEnv:
                     epsilon_outer=self.config.gripper_max_width_m,
                 )
             )
+            self._gripper_holding = grasped
         else:
             grasped = bool(self._gripper.move(width=width, speed=0.05))
+            self._gripper_holding = False
         return {
             "commanded_width_m": round(width, 4),
             "measured_width_m": round(float(self._gripper.read_once().width), 4),

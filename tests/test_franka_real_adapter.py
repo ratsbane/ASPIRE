@@ -182,6 +182,38 @@ def test_closing_on_a_block_still_reports_success():
     assert env._gripper.width == pytest.approx(0.028)
 
 
+def test_recommanding_the_held_width_is_a_noop():
+    """Planned trajectories carry per-waypoint gripper values, and after a
+    carry the final value re-commands the width the fingers already hold.
+    Live, libfranka failed that command while gripping ('libfranka gripper:
+    Command failed!') and poisoned an otherwise successful motion."""
+    env, _ = build()
+    env._gripper.width = 0.028  # holding a block
+    result = env.set_gripper_width(0.0285)
+    assert result["ok"] is True
+    assert result["noop"] == "already at width"
+    assert env._gripper.grasps == []
+    assert env._gripper.width == pytest.approx(0.028)
+
+
+def test_reclosing_while_holding_never_reaches_libfranka():
+    """The live re-stack's failed moves: the trajectory re-asserts the
+    program's close command (0.02 m) while the fingers hold a block at
+    0.028 m, and libfranka rejects a fresh grasp mid-grip. Re-closing while
+    holding must be a successful no-op; opening clears the hold."""
+    env, adapter = build()
+    adapter.set_gripper(0.25)  # the fake block stops the fingers at 0.028
+    assert len(env._gripper.grasps) == 1
+    result = env.set_gripper_width(0.02)
+    assert result["ok"] is True
+    assert result["noop"] == "already grasping"
+    assert len(env._gripper.grasps) == 1  # no second grasp command was sent
+    env.set_gripper_width(0.08)  # open releases the hold
+    result = env.set_gripper_width(0.02)  # a fresh close grasps again
+    assert "noop" not in result
+    assert len(env._gripper.grasps) == 2
+
+
 def test_go_home_opens_and_returns_to_the_profile_home():
     env, adapter = build()
     env._panda.q = HOME + 0.1
