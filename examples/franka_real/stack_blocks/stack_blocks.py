@@ -10,6 +10,9 @@ SURVEY = {"position": [0.44, -0.05, 0.31], "frame": "base", "rpy_deg": [180.0, 0
 FAILED_MOVE = {"stage": None}
 
 
+LONG_MOVE_STEPS = 600
+
+
 def must(move_result, stage):
     """A failed motion must stop the plan, not be shrugged past: the first live
     run closed the gripper on air at survey height because three refused moves
@@ -69,7 +72,7 @@ else:
         set_gripper(0.25)
         held = get_robot_state().gripper_positions["primary"]
         must(move_to_pose({"position": [bx, by, CARRY_Z], "frame": "base",
-                           "quaternion_wxyz": grasp_quat}), "lift")
+                           "quaternion_wxyz": grasp_quat}, max_steps=LONG_MOVE_STEPS), "lift")
         if held < 0.08:
             open_gripper()
             go_home()
@@ -84,12 +87,12 @@ else:
             place_quat = down_quat(box_yaw(green))
             place_z = green_top + (GRASP_EE_Z - TABLE_Z) + 0.004
             move_to_pose({"position": [gx, gy, CARRY_Z], "frame": "base",
-                          "quaternion_wxyz": place_quat})
+                          "quaternion_wxyz": place_quat}, max_steps=LONG_MOVE_STEPS)
             move_to_pose({"position": [gx, gy, place_z], "frame": "base",
-                          "quaternion_wxyz": place_quat})
+                          "quaternion_wxyz": place_quat}, max_steps=LONG_MOVE_STEPS)
             set_gripper(min(1.0, held + 0.2))
             move_to_pose({"position": [gx, gy, CARRY_Z], "frame": "base",
-                          "quaternion_wxyz": place_quat})
+                          "quaternion_wxyz": place_quat}, max_steps=LONG_MOVE_STEPS)
             open_gripper()
             check = locate("blue block", above=[gx, gy])
             risen = check is not None and float(check.pose.position[2]) > green_top - 0.005

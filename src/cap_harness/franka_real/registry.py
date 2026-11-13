@@ -68,6 +68,11 @@ FRANKA_REAL_TASKS: tuple[FrankaRealTaskMetadata, ...] = (
         "Take the blue block off the green block and set it on clear table.",
         scene_reset="skill",
     ),
+    FrankaRealTaskMetadata(
+        "move_red",
+        "Pick up the red block and set it down on a clear patch of table.",
+        scene_reset="none",
+    ),
 )
 
 
