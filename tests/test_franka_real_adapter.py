@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cap_harness.contracts import ArmCommand, Pose, RobotAction, Trajectory
+from cap_harness.contracts import ArmCommand, Pose, RobotAction, RobotState, Trajectory
 from cap_harness.errors import ErrorCode
 from cap_harness.franka_real.adapter import FrankaRealAdapter
 from cap_harness.franka_real.config import FrankaStationConfig
@@ -225,9 +225,10 @@ def test_ik_provider_round_trips_through_the_same_fk():
     provider = FrankaIKProvider(ik=toy_ik, fk=fake_fk)
     _, adapter = build()
     state = adapter.get_robot_state()
+    # The toy FK has identity rotation, so the target must too.
     target = Pose(
         position=np.array([0.5, 0.05, 0.25]),
-        quaternion_wxyz=np.array([0.0, 1.0, 0.0, 0.0]),
+        quaternion_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
         frame="base",
     )
     result = provider.solve_ik(target, state)
@@ -236,12 +237,50 @@ def test_ik_provider_round_trips_through_the_same_fk():
 
     unreachable = Pose(
         position=np.array([0.5, 20.0, 0.25]),
-        quaternion_wxyz=np.array([0.0, 1.0, 0.0, 0.0]),
+        quaternion_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
         frame="base",
     )
     refused = provider.solve_ik(unreachable, state)
     assert refused.ok is False
     assert refused.error.code in (ErrorCode.IK_UNREACHABLE, ErrorCode.IK_FAILED)
+
+
+def test_real_solver_reaches_a_yawed_down_grasp():
+    """Regression for the first live stack attempt: a down-grasp at -48 deg
+    yaw was 'unreachable' while q_7 stayed pinned at the seed's value."""
+    panda_py = pytest.importorskip("panda_py")
+    import math
+
+    provider = FrankaIKProvider(ik=panda_py.ik, fk=panda_py.fk)
+    state = RobotState(
+        joint_positions={"primary": HOME},
+        joint_velocities={"primary": np.zeros(ARM_DOF)},
+        end_effector_poses={
+            "primary": Pose(
+                position=np.asarray(panda_py.fk(HOME))[:3, 3],
+                quaternion_wxyz=np.array([0.0, 1.0, 0.0, 0.0]),
+                frame="base",
+            )
+        },
+        gripper_positions={"primary": 1.0},
+        base_frame="base",
+        embodiment="franka_real",
+    )
+    yaw = math.radians(-48.0)
+    target = Pose(
+        position=np.array([0.437, 0.002, 0.107]),
+        quaternion_wxyz=np.array(
+            [0.0, math.cos(yaw / 2.0), math.sin(yaw / 2.0), 0.0]
+        ),
+        frame="base",
+    )
+    result = provider.solve_ik(target, state)
+    assert result.ok is True, result.error and result.error.message
+    reached = np.asarray(panda_py.fk(result.joint_positions))
+    assert np.linalg.norm(reached[:3, 3] - target.position) < 0.005
+    # The achieved orientation matches the yawed grasp, not just the position.
+    alignment = float(np.trace(reached[:3, :3].T @ target.as_matrix()[:3, :3]))
+    assert alignment > 1.0 + 2.0 * np.cos(np.deg2rad(3.0))
 
 
 def test_colorblob_provider_segments_a_blue_region():

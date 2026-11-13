@@ -65,32 +65,56 @@ class FrankaIKProvider:
                 f"{robot_state.base_frame!r}",
             )
         matrix = np.asarray(target_pose.as_matrix(), dtype=np.float64)
-        try:
-            solution = np.asarray(
-                self._ik(matrix, q_init=seed, q_7=float(seed[6])), dtype=np.float64
-            ).reshape(ARM_DOF)
-        except TypeError:
-            solution = np.asarray(self._ik(matrix), dtype=np.float64).reshape(ARM_DOF)
-        except Exception as exc:
-            return failure(ErrorCode.IK_FAILED, f"{type(exc).__name__}: {exc}")
-        if not np.all(np.isfinite(solution)):
-            return failure(ErrorCode.IK_UNREACHABLE, "the analytical solver returned no solution")
-        if np.any(solution < PANDA_LOWER - 1e-9) or np.any(solution > PANDA_UPPER + 1e-9):
+
+        # q_7 parameterizes Franka's redundancy, and the right value depends on
+        # the requested orientation: a down-grasp turned 48 degrees needs the
+        # wrist turned with it, so pinning q_7 at the seed's value makes every
+        # rotated pose "unreachable" (found live, first stack attempt). Sweep
+        # the joint's range and keep the valid solution nearest the seed.
+        best: np.ndarray | None = None
+        best_cost = float("inf")
+        for q7 in np.arange(PANDA_LOWER[6] + 0.05, PANDA_UPPER[6] - 0.05 + 1e-9, 0.1):
+            try:
+                candidate = np.asarray(
+                    self._ik(matrix, q_init=seed, q_7=float(q7)), dtype=np.float64
+                ).reshape(ARM_DOF)
+            except TypeError:
+                try:
+                    candidate = np.asarray(self._ik(matrix), dtype=np.float64).reshape(ARM_DOF)
+                except Exception as exc:
+                    return failure(ErrorCode.IK_FAILED, f"{type(exc).__name__}: {exc}")
+            except Exception as exc:
+                return failure(ErrorCode.IK_FAILED, f"{type(exc).__name__}: {exc}")
+            if not np.all(np.isfinite(candidate)):
+                continue
+            if np.any(candidate < PANDA_LOWER - 1e-9) or np.any(candidate > PANDA_UPPER + 1e-9):
+                continue
+            transform = np.asarray(self._fk(candidate))
+            if float(np.linalg.norm(transform[:3, 3] - matrix[:3, 3])) > POSITION_TOLERANCE_M:
+                continue
+            # Orientation must survive too: a pose is position AND rotation.
+            alignment = float(np.trace(transform[:3, :3].T @ matrix[:3, :3]))
+            if alignment < 1.0 + 2.0 * np.cos(np.deg2rad(3.0)):
+                continue
+            cost = float(np.linalg.norm(candidate - seed))
+            if cost < best_cost:
+                best, best_cost = candidate, cost
+        if best is None:
             return failure(
-                ErrorCode.IK_UNREACHABLE, "the only solution violates a joint limit"
+                ErrorCode.IK_UNREACHABLE,
+                "no in-limit solution at any wrist angle reaches the requested pose",
             )
-        reached = np.asarray(self._fk(solution))[:3, 3]
+        reached = np.asarray(self._fk(best))[:3, 3]
         residual = float(np.linalg.norm(reached - matrix[:3, 3]))
-        if residual > POSITION_TOLERANCE_M:
-            return failure(
-                ErrorCode.IK_FAILED,
-                f"solution lands {residual * 1000:.1f} mm from the requested position",
-            )
         return IKResult(
             ok=True,
-            joint_positions=solution,
+            joint_positions=best,
             arm=arm,
-            diagnostics={"position_residual_mm": round(residual * 1000, 3)},
+            diagnostics={
+                "position_residual_mm": round(residual * 1000, 3),
+                "q7": round(float(best[6]), 4),
+                "seed_distance_rad": round(best_cost, 4),
+            },
             embodiment=robot_state.embodiment,
         )
 
