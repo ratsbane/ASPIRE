@@ -26,7 +26,11 @@ back above the rim before moving laterally.
 
 1. For each slot, in order: pick a block from the box (at most two grasp
    attempts per slot), carry high, place at the slot centre with the wall's
-   yaw (end-effector at table + 0.014 m), release narrow, retreat.
+   yaw, release narrow, retreat. Prefer candidates whose scanned footprint
+   shows the long side (lying flat); when only standing blocks remain, take
+   one, place it at its own height (its bottom hangs 55 mm below the top,
+   not 28 -- the flat-height assumption fired the cartesian reflex live) and
+   report the orientation honestly.
 2. Verify each placement by re-segmenting above the slot: a block instance
    within 0.03 m of the slot centre. Record the measured position; a slot
    that cannot be verified is reported, not papered over.
@@ -38,5 +42,7 @@ back above the rim before moving laterally.
 A refused approach or descent aborts the whole build through `go_home` -- a
 wall program that shrugs past refusals will stack failures into later slots.
 A close on air re-surveys the box and retries once before moving on. Tall
-moves need a generous `max_steps`. Expect this task to be long: tens of
-moves; budget the run timeout accordingly.
+moves need a generous `max_steps` (the plan's waypoint count is checked
+against it before decimation). Expect this task to be long even with brisk
+motion: tens of moves plus a scan per slot; budget the run timeout
+accordingly.

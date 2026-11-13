@@ -106,6 +106,13 @@ class FrankaStationConfig:
     speed_factor: float = 0.12
     """panda_py motion-generator speed scale for executed waypoints."""
 
+    waypoint_chord_tolerance_rad: float = 0.05
+    """Decimation fidelity for executed batches. The motion generator comes to
+    rest at every waypoint it is given, so a dense planned path executes as a
+    crawl; a waypoint within this joint-space distance of the straight chord
+    between its kept neighbours is dropped before sending. 0 disables
+    decimation and sends every planned waypoint."""
+
     gripper_max_width_m: float = 0.08
     gripper_force_n: float = 25.0
     joint_limits_lower: tuple[float, ...] = (

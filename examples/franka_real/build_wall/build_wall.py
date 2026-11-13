@@ -2,7 +2,9 @@ import math
 
 TABLE_Z = 0.017
 GRASP_OFFSET = 0.017
-PLACE_EE_Z = TABLE_Z + 0.014
+BLOCK_LONG_M = 0.055
+BLOCK_FLAT_M = 0.028
+RELEASE_GAP_M = 0.003
 CARRY_Z = 0.22
 LONG_MOVE_STEPS = 600
 GRASP_TRIES_PER_SLOT = 2
@@ -39,6 +41,21 @@ def box_yaw(geometry):
     return math.atan2(float(matrix[1, axis]), float(matrix[0, axis]))
 
 
+def is_flat(block):
+    """A footprint showing the block's long side means it lies flat."""
+    return block["footprint"] >= 0.045
+
+
+def place_ee_z(block):
+    """Preserve the held block's bottom clearance instead of assuming flat.
+
+    Live lesson from the first clutter pick: a block grasped standing on end
+    hangs 55 mm below the top, not 28, and lowering it to flat-block height
+    drove its bottom into the table and fired the cartesian reflex."""
+    vertical = BLOCK_FLAT_M if is_flat(block) else BLOCK_LONG_M
+    return TABLE_Z + (vertical - GRASP_OFFSET) + RELEASE_GAP_M
+
+
 def survey(x, y):
     return move_to_pose({"position": [x, y, 0.33], "frame": "base",
                          "rpy_deg": [180.0, 0.0, 0.0]})
@@ -57,6 +74,7 @@ def scan():
         if max(extents) > 0.10:
             continue
         out.append({"x": px, "y": py, "top": pz + extents[2] / 2.0,
+                    "footprint": max(extents[0], extents[1]),
                     "geometry": geometry})
     return out
 
@@ -67,7 +85,14 @@ def in_box(block):
 
 
 def choose(blocks):
-    ordered = sorted(blocks, key=lambda b: -b["top"])
+    """The wall wants blocks lying flat; among those, highest clear top wins.
+
+    A standing block still gets picked when nothing lies flat -- it is placed
+    at its own height and reported, since a standing block in a slot is a
+    verifiable block, just not a pretty one."""
+    lying = [b for b in blocks if is_flat(b)]
+    pool = lying if lying else blocks
+    ordered = sorted(pool, key=lambda b: -b["top"])
     for block in ordered:
         clear = all(math.hypot(block["x"] - o["x"], block["y"] - o["y"]) >= 0.035
                     for o in blocks if o is not block)
@@ -82,12 +107,12 @@ def slot_centre(index):
 
 
 def pick_one():
-    """One block out of the box, held above the rim. Returns (status, grip)."""
+    """One block out of the box, held above the rim: (status, grip, block)."""
     for attempt in range(GRASP_TRIES_PER_SLOT):
         survey(BOX[0], BOX[1])
         blocks = [b for b in scan() if in_box(b)]
         if not blocks:
-            return "empty", 0.0
+            return "empty", 0.0, None
         pick = choose(blocks)
         quat = down_quat(box_yaw(pick["geometry"]))
         grasp_z = max(pick["top"] - GRASP_OFFSET, TABLE_Z + 0.008)
@@ -99,7 +124,7 @@ def pick_one():
                                    "frame": "base", "quaternion_wxyz": quat},
                                   max_steps=LONG_MOVE_STEPS), "descend")
         if not reached:
-            return "aborted", 0.0
+            return "aborted", 0.0, None
         set_gripper(0.25)
         grip = get_robot_state().gripper_positions["primary"]
         must(move_to_pose({"position": [pick["x"], pick["y"], SAFE_Z],
@@ -108,8 +133,8 @@ def pick_one():
         if grip < 0.08:
             open_gripper()
             continue  # shoved it; re-survey and retry
-        return "held", grip
-    return "failed", 0.0
+        return "held", grip, pick
+    return "failed", 0.0, None
 
 
 place_quat = down_quat(WALL_YAW)
@@ -117,7 +142,7 @@ slots_report = []
 status = "built"
 for index in range(SLOTS):
     sx, sy = slot_centre(index)
-    picked, grip = pick_one()
+    picked, grip, block = pick_one()
     if picked == "empty":
         status = "box_empty"
         slots_report.append({"slot": index, "ok": False, "note": "box empty"})
@@ -129,7 +154,7 @@ for index in range(SLOTS):
     must(move_to_pose({"position": [sx, sy, CARRY_Z], "frame": "base",
                        "quaternion_wxyz": place_quat}, max_steps=LONG_MOVE_STEPS),
          "carry")
-    must(move_to_pose({"position": [sx, sy, PLACE_EE_Z], "frame": "base",
+    must(move_to_pose({"position": [sx, sy, place_ee_z(block)], "frame": "base",
                        "quaternion_wxyz": place_quat}, max_steps=LONG_MOVE_STEPS),
          "lower")
     set_gripper(min(1.0, grip + 0.2))
@@ -147,6 +172,7 @@ for index in range(SLOTS):
     slots_report.append({
         "slot": index, "ok": bool(verified),
         "target": [round(sx, 4), round(sy, 4)],
+        "orientation": "flat" if is_flat(block) else "standing",
         "found_at": None if nearest is None else
         [round(nearest["x"], 4), round(nearest["y"], 4)],
     })

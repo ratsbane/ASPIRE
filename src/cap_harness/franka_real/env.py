@@ -112,6 +112,61 @@ class RealFrankaEnv:
                 )
         return None
 
+    def _decimate_waypoints(self, points: np.ndarray) -> np.ndarray:
+        """Drop the waypoints the motion generator would only stop at.
+
+        The generator comes to rest at every waypoint it is given, so a dense
+        planned path executes as a crawl (measured live: a 19-waypoint descent
+        took ~2 minutes). Between two kept waypoints the generator's
+        time-synchronized profiles move each joint monotonically toward the
+        next rest, staying near the joint-space chord, so a planned waypoint
+        that lies on that chord adds a stop and no information. Keep the first
+        and last, extend each chord greedily while every dropped waypoint
+        stays within the configured tolerance of it, and re-run the workspace
+        guard over the chords themselves (sampled at the dropped waypoints'
+        parameters); if the sparser path cannot be shown safe, send the dense
+        one and be slow rather than clever.
+        """
+        tolerance = float(self.config.waypoint_chord_tolerance_rad)
+        if tolerance <= 0.0 or points.shape[0] <= 2:
+            return points
+
+        def deviation(start: np.ndarray, end: np.ndarray, middle: np.ndarray) -> float:
+            chord = end - start
+            length_sq = float(chord @ chord)
+            if length_sq < 1e-12:
+                return float(np.linalg.norm(middle - start))
+            fraction = float(np.clip((middle - start) @ chord / length_sq, 0.0, 1.0))
+            return float(np.linalg.norm(middle - (start + fraction * chord)))
+
+        kept = [0]
+        anchor = 0
+        end = 1
+        while end < points.shape[0] - 1:
+            within = all(
+                deviation(points[anchor], points[end + 1], points[middle]) <= tolerance
+                for middle in range(anchor + 1, end + 1)
+            )
+            if within:
+                end += 1
+            else:
+                kept.append(end)
+                anchor = end
+                end += 1
+        kept.append(points.shape[0] - 1)
+        if len(kept) == points.shape[0]:
+            return points
+        # The executed path follows the chords, not the planned waypoints the
+        # chords replace: guard the chords at the dropped parameters too.
+        samples = []
+        for left, right in zip(kept, kept[1:]):
+            for middle in range(left + 1, right):
+                fraction = (middle - left) / (right - left)
+                samples.append(points[left] + fraction * (points[right] - points[left]))
+        if samples and self.guard_waypoints(np.asarray(samples)) is not None:
+            return points
+        return points[kept]
+
     def execute_waypoints(
         self, waypoints: np.ndarray, *, speed_factor: Optional[float] = None
     ) -> dict[str, Any]:
@@ -126,10 +181,11 @@ class RealFrankaEnv:
         refusal = self.guard_waypoints(points)
         if refusal is not None:
             raise ValueError(refusal)
+        sent = self._decimate_waypoints(points)
         factor = float(speed_factor if speed_factor is not None else self.config.speed_factor)
         started = time.monotonic()
         converged = bool(
-            self._panda.move_to_joint_position([row for row in points], speed_factor=factor)
+            self._panda.move_to_joint_position([row for row in sent], speed_factor=factor)
         )
         self.motions_executed += 1
         if not converged:
@@ -138,6 +194,7 @@ class RealFrankaEnv:
             )
         return {
             "waypoints": int(points.shape[0]),
+            "waypoints_sent": int(sent.shape[0]),
             "speed_factor": factor,
             "elapsed_s": round(time.monotonic() - started, 3),
             "retimed_by": "panda_py_motion_generator",

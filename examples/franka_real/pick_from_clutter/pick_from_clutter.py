@@ -2,7 +2,9 @@ import math
 
 TABLE_Z = 0.017
 GRASP_OFFSET = 0.017  # fingers engage this far below a block's measured top
-PLACE_EE_Z = TABLE_Z + 0.014
+BLOCK_LONG_M = 0.055
+BLOCK_FLAT_M = 0.028
+RELEASE_GAP_M = 0.003
 CARRY_Z = 0.22
 LONG_MOVE_STEPS = 600
 MAX_ATTEMPTS = 3
@@ -33,6 +35,18 @@ def box_yaw(geometry):
     return math.atan2(float(matrix[1, axis]), float(matrix[0, axis]))
 
 
+def place_ee_z(block):
+    """Place height that preserves the held block's bottom clearance.
+
+    The first live pick grabbed a block standing on end and lowered it to the
+    flat-block height; its bottom hit the table 25 mm early and the cartesian
+    reflex aborted the move. The scan's footprint says which way the block
+    hangs: a footprint showing the long side lies flat (28 mm tall in hand),
+    anything narrower stands on end (55 mm)."""
+    vertical = BLOCK_FLAT_M if block["footprint"] >= 0.045 else BLOCK_LONG_M
+    return TABLE_Z + (vertical - GRASP_OFFSET) + RELEASE_GAP_M
+
+
 def survey(x, y):
     return move_to_pose({"position": [x, y, 0.33], "frame": "base",
                          "rpy_deg": [180.0, 0.0, 0.0]})
@@ -52,6 +66,7 @@ def scan():
         if max(extents) > 0.10:  # merged neighbours or residual bleed, not one block
             continue
         out.append({"x": px, "y": py, "top": pz + extents[2] / 2.0,
+                    "footprint": max(extents[0], extents[1]),
                     "geometry": geometry})
     return out
 
@@ -123,7 +138,7 @@ elif held_block is not None:
                       max_steps=LONG_MOVE_STEPS), "rise")
     must(move_to_pose({"position": [TARGET[0], TARGET[1], CARRY_Z], "frame": "base",
                        "quaternion_wxyz": quat}, max_steps=LONG_MOVE_STEPS), "carry")
-    must(move_to_pose({"position": [TARGET[0], TARGET[1], PLACE_EE_Z],
+    must(move_to_pose({"position": [TARGET[0], TARGET[1], place_ee_z(held_block)],
                        "frame": "base", "quaternion_wxyz": quat},
                       max_steps=LONG_MOVE_STEPS), "lower")
     set_gripper(min(1.0, held + 0.2))
@@ -141,6 +156,7 @@ elif held_block is not None:
     placed = nearest is not None and nearest["distance"] < 0.03
     result = {"ok": bool(placed), "stage": "placed" if placed else "not_verified",
               "target": TARGET, "attempts": attempt,
+              "orientation": "flat" if held_block["footprint"] >= 0.045 else "standing",
               "picked_from": [round(held_block["x"], 4), round(held_block["y"], 4),
                               round(held_block["top"], 4)],
               "found_at": None if nearest is None else

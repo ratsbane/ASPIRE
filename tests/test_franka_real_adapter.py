@@ -155,6 +155,78 @@ def test_a_trajectory_executes_through_the_single_chokepoint():
     assert result.diagnostics["retimed_by"] == "panda_py_motion_generator"
 
 
+def test_a_straight_dense_path_decimates_to_its_endpoints():
+    """The generator rests at every waypoint it is given (a 19-waypoint
+    descent took ~2 minutes live), so colinear interior waypoints add stops
+    and no information."""
+    env, adapter = build()
+    target = HOME.copy()
+    target[3] += 0.5
+    dense = np.linspace(HOME, target, 19)
+    result = adapter.execute_trajectory(home_trajectory(adapter, dense))
+    assert result.ok is True
+    sent, _ = env._panda.batches[-1]
+    assert sent.shape[0] == 2
+    assert np.allclose(sent[0], HOME) and np.allclose(sent[-1], target)
+
+
+def test_decimation_keeps_corners_and_stays_true_to_the_plan():
+    env, adapter = build()
+    mid = HOME.copy()
+    mid[1] += 0.4
+    end = HOME.copy()
+    end[1] += 0.4
+    end[3] += 0.4
+    dense = np.vstack([np.linspace(HOME, mid, 10), np.linspace(mid, end, 10)[1:]])
+    result = adapter.execute_trajectory(home_trajectory(adapter, dense))
+    assert result.ok is True
+    sent, _ = env._panda.batches[-1]
+    assert 3 <= sent.shape[0] <= 4  # the corner survives, the straights do not
+    # Fidelity: every planned waypoint lies within tolerance of the sent path.
+    tolerance = env.config.waypoint_chord_tolerance_rad
+    for q in dense:
+        best = min(
+            _point_to_segment(q, sent[i], sent[i + 1])
+            for i in range(sent.shape[0] - 1)
+        )
+        assert best <= tolerance + 1e-9
+
+
+def _point_to_segment(point, start, end):
+    chord = end - start
+    length_sq = float(chord @ chord)
+    if length_sq < 1e-12:
+        return float(np.linalg.norm(point - start))
+    t = float(np.clip((point - start) @ chord / length_sq, 0.0, 1.0))
+    return float(np.linalg.norm(point - (start + t * chord)))
+
+
+def test_an_unprovable_chord_falls_back_to_the_dense_path():
+    """Decimation re-guards the chords it executes in place of the planned
+    waypoints; when that cannot be shown safe, slow and dense wins."""
+    env, adapter = build()
+    mid = HOME.copy()
+    mid[1] += 0.4
+    end = HOME.copy()
+    end[1] += 0.4
+    end[3] += 0.4
+    dense = np.vstack([np.linspace(HOME, mid, 10), np.linspace(mid, end, 10)[1:]])
+    planned = {tuple(np.round(q, 9)) for q in dense}
+    real_guard = env.guard_waypoints
+
+    def refuse_synthetic_samples(points):
+        for q in np.asarray(points, dtype=np.float64).reshape(-1, ARM_DOF):
+            if tuple(np.round(q, 9)) not in planned:
+                return "synthetic chord sample refused"
+        return real_guard(points)
+
+    env.guard_waypoints = refuse_synthetic_samples
+    result = adapter.execute_trajectory(home_trajectory(adapter, dense))
+    assert result.ok is True
+    sent, _ = env._panda.batches[-1]
+    assert sent.shape[0] == dense.shape[0]
+
+
 def test_step_moves_one_waypoint_and_the_gripper():
     env, adapter = build()
     target = HOME.copy()

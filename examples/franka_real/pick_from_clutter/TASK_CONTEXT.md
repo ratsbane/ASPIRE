@@ -34,9 +34,14 @@ for one block.
    motion -- the box walls are obstacles the workspace guard does not know.
 4. A close on air means the block was shoved: open, re-survey, re-choose, at
    most three attempts.
-5. Carry high, place at the target (end-effector at table + 0.014 m), release
-   narrow, retreat, verify by re-segmenting above the target: success is a
-   block instance within 0.03 m of it. Report what was measured.
+5. Carry high, place at a height that preserves the held block's bottom
+   clearance: the scan's footprint says how the block hangs (a footprint
+   showing the long ~55 mm side lies flat, 28 mm tall in hand; a narrower
+   footprint stands on end, 55 mm tall), and lowering a standing block to
+   flat-block height drives it into the table and fires the cartesian reflex
+   (measured live on the first pick). Release narrow, retreat, verify by
+   re-segmenting above the target: success is a block instance within 0.03 m
+   of it. Report what was measured, including the block's orientation.
 
 ## Recovery
 
