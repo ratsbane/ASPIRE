@@ -52,6 +52,25 @@ class FrankaCameraConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class FrankaSceneCameraConfig:
+    """A fixed third-person RGB-D camera, posed in the base frame.
+
+    Unlike the wrist camera its pose is static, solved by
+    :mod:`cap_harness.franka_real.scene_calibration` from the table plane and
+    touch-verified block landmarks. Centimetre-grade: attribution and episode
+    video, not grasping.
+    """
+
+    serial: str
+    role: str = "scene"
+    resolution: tuple[int, int] = (640, 480)
+    fps: int = 15
+    pose_position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    pose_quaternion_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    calibrated: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class FrankaWorkspace:
     """Axis-aligned box, base frame, that every commanded EE position must stay in.
 
@@ -80,6 +99,7 @@ class FrankaStationConfig:
     station: str = "franka-bench"
     robot_host: str = "192.168.0.253"
     camera: FrankaCameraConfig = field(default_factory=FrankaCameraConfig)
+    scene_camera: FrankaSceneCameraConfig | None = None
     workspace: FrankaWorkspace = field(default_factory=FrankaWorkspace)
     home_joints: tuple[float, ...] = (0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785)
     control_frequency_hz: float = 20.0
@@ -131,15 +151,24 @@ def load_station_config(
     camera = FrankaCameraConfig(
         **{k: tuple(v) if isinstance(v, list) else v for k, v in raw.pop("camera", {}).items()}
     )
+    scene_raw = raw.pop("scene_camera", None)
+    scene = None
+    if scene_raw is not None:
+        scene = FrankaSceneCameraConfig(
+            **{k: tuple(v) if isinstance(v, list) else v for k, v in scene_raw.items()}
+        )
     workspace = FrankaWorkspace(
         **{k: tuple(v) for k, v in raw.pop("workspace", {}).items()}
     )
     fields = {k: tuple(v) if isinstance(v, list) else v for k, v in raw.items()}
-    return FrankaStationConfig(station=name, camera=camera, workspace=workspace, **fields)
+    return FrankaStationConfig(
+        station=name, camera=camera, scene_camera=scene, workspace=workspace, **fields
+    )
 
 
 __all__ = [
     "FrankaCameraConfig",
+    "FrankaSceneCameraConfig",
     "FrankaStationConfig",
     "FrankaWorkspace",
     "load_station_config",

@@ -47,6 +47,7 @@ EMBODIMENT = "franka_real"
 ARM = "primary"
 BASE_FRAME = "base"
 CAMERA_FRAME = "wrist_camera"
+SCENE_FRAME = "scene_camera"
 JOINT_NAMES = tuple(f"panda_joint{index + 1}" for index in range(ARM_DOF))
 CAMERA_WAIT_S = 2.0
 
@@ -196,8 +197,29 @@ class FrankaRealAdapter:
             camera_pose=camera_pose,
             timestamp_s=frame.timestamp_s,
         )
+        cameras = {self._env.config.camera.role: camera}
+        scene_config = self._env.config.scene_camera
+        scene_frame = self._env.capture_scene()
+        if scene_config is not None and scene_frame is not None:
+            # The scene camera's pose is static in the base frame, solved once
+            # by scene_calibration.py. Centimetre-grade by construction: good
+            # for attribution and video, not for grasp targets.
+            cameras[scene_config.role] = CameraObservation(
+                rgb=scene_frame.rgb,
+                depth_m=scene_frame.depth_m,
+                intrinsics=scene_frame.intrinsics,
+                frame=SCENE_FRAME,
+                camera_pose=Pose(
+                    position=np.asarray(scene_config.pose_position, dtype=np.float64),
+                    quaternion_wxyz=np.asarray(
+                        scene_config.pose_quaternion_wxyz, dtype=np.float64
+                    ),
+                    frame=BASE_FRAME,
+                ),
+                timestamp_s=scene_frame.timestamp_s,
+            )
         return Observation(
-            cameras={self._env.config.camera.role: camera},
+            cameras=cameras,
             robot_state=state,
             task_context=self._task_context,
             timestamp_s=time.time(),
@@ -388,7 +410,8 @@ class FrankaRealAdapter:
             "station": self._env.config.station,
             "arms": [ARM],
             "dof": ARM_DOF,
-            "cameras": [self._env.config.camera.role],
+            "cameras": [self._env.config.camera.role]
+            + ([self._env.config.scene_camera.role] if self._env.config.scene_camera else []),
             "language": "" if context is None else context.language,
             "scene_reset": ""
             if context is None

@@ -49,7 +49,19 @@ def build_real_station(
     panda = panda_py.Panda(config.robot_host)
     gripper = libfranka.Gripper(config.robot_host)
     camera = _open_camera(config)
-    return RealFrankaEnv(config, panda=panda, gripper=gripper, camera=camera, fk=panda_py.fk)
+    scene = None
+    if config.scene_camera is not None:
+        scene = ThreadedCamera(
+            RealSenseCamera(
+                config.scene_camera.serial,
+                resolution=config.scene_camera.resolution,
+                fps=config.scene_camera.fps,
+            )
+        )
+    return RealFrankaEnv(
+        config, panda=panda, gripper=gripper, camera=camera, scene_camera=scene,
+        fk=panda_py.fk,
+    )
 
 
 __all__ = ["build_real_station"]

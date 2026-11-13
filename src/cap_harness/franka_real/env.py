@@ -42,11 +42,13 @@ class RealFrankaEnv:
         gripper: Any,
         camera: Optional[Camera],
         fk: Callable[[np.ndarray], np.ndarray],
+        scene_camera: Optional[Camera] = None,
     ) -> None:
         self.config = config
         self._panda = panda
         self._gripper = gripper
         self._camera = camera
+        self._scene_camera = scene_camera
         self._fk = fk
         self._closed = False
         self.motions_executed = 0
@@ -82,6 +84,12 @@ class RealFrankaEnv:
         if self._camera is None:
             return None
         return self._camera.read()
+
+    def capture_scene(self) -> Optional[CameraFrame]:
+        """The fixed scene camera's most recent frame, when the station has one."""
+        if self._scene_camera is None:
+            return None
+        return self._scene_camera.read()
 
     # -- the chokepoint ----------------------------------------------------
 
@@ -178,11 +186,12 @@ class RealFrankaEnv:
         if self._closed:
             return
         self._closed = True
-        if self._camera is not None:
-            try:
-                self._camera.close()
-            except Exception:
-                pass
+        for camera in (self._camera, self._scene_camera):
+            if camera is not None:
+                try:
+                    camera.close()
+                except Exception:
+                    pass
 
 
 __all__ = ["ARM_DOF", "RealFrankaEnv"]

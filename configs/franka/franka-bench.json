@@ -1,0 +1,21 @@
+{
+ "camera": {
+  "serial": "218622274622"
+ },
+ "scene_camera": {
+  "serial": "938422073914",
+  "fps": 15,
+  "pose_position": [
+   0.8546,
+   -0.1076,
+   0.2815
+  ],
+  "pose_quaternion_wxyz": [
+   0.37356,
+   -0.617995,
+   -0.565107,
+   0.398986
+  ],
+  "calibrated": "plane+landmark solve; see scene_calibration.py"
+ }
+}

@@ -312,3 +312,98 @@ def test_colorblob_provider_segments_a_blue_region():
 
     unknown = provider.segment_text(camera, "the mug")
     assert unknown.ok is False
+
+
+def test_scene_pose_solver_recovers_a_known_camera():
+    """Synthetic truth: place a camera, generate its view of the plane and two
+    landmarks, and demand the solver hand the pose back."""
+    from cap_harness.franka_real.scene_calibration import solve_pose
+
+    angle = np.deg2rad(32.0)
+    yaw_true = np.deg2rad(14.0)
+    pitch = np.array([
+        [1, 0, 0],
+        [0, np.cos(angle), -np.sin(angle)],
+        [0, np.sin(angle), np.cos(angle)],
+    ])
+    spin = np.array([
+        [np.cos(yaw_true), -np.sin(yaw_true), 0],
+        [np.sin(yaw_true), np.cos(yaw_true), 0],
+        [0, 0, 1],
+    ])
+    rotation_true = spin @ pitch
+    position_true = np.array([0.52, 0.31, 0.47])
+
+    world_landmarks = {
+        "blue": np.array([0.461, -0.156, 0.075]),
+        "red": np.array([0.394, -0.062, 0.072]),
+    }
+    inverse = rotation_true.T
+    landmarks = {
+        name: (inverse @ (w - position_true), w) for name, w in world_landmarks.items()
+    }
+    table_z = 0.0177
+    # The table plane, seen from the camera: world normal +z, height table_z.
+    normal_cam = inverse @ np.array([0.0, 0.0, 1.0])
+    point_on_plane_cam = inverse @ (np.array([0.45, 0.0, table_z]) - position_true)
+    offset = -float(normal_cam @ point_on_plane_cam)
+
+    transform, report = solve_pose((normal_cam, offset), landmarks, table_z)
+    assert np.allclose(transform[:3, 3], position_true, atol=1e-6)
+    assert np.allclose(transform[:3, :3], rotation_true, atol=1e-6)
+    assert all(v < 0.01 for v in report["per_landmark_residual_mm"].values())
+    assert abs(report["table_z_residual_mm"]) < 0.01
+
+
+def test_station_profile_round_trips_a_scene_camera(tmp_path):
+    import json
+
+    from cap_harness.franka_real.config import load_station_config
+
+    profile = {
+        "camera": {"serial": "218622274622"},
+        "scene_camera": {
+            "serial": "938422073914",
+            "fps": 15,
+            "pose_position": [0.52, 0.31, 0.47],
+            "pose_quaternion_wxyz": [0.9, 0.1, 0.1, 0.4],
+            "calibrated": "test",
+        },
+    }
+    (tmp_path / "bench-two-cams.json").write_text(json.dumps(profile))
+    config = load_station_config("bench-two-cams", tmp_path)
+    assert config.camera.serial == "218622274622"
+    assert config.scene_camera.serial == "938422073914"
+    assert config.scene_camera.pose_position == (0.52, 0.31, 0.47)
+
+
+def test_observation_carries_both_cameras_when_the_station_has_two():
+    from cap_harness.franka_real.config import FrankaSceneCameraConfig
+
+    config = FrankaStationConfig(
+        scene_camera=FrankaSceneCameraConfig(
+            serial="x",
+            pose_position=(0.52, 0.31, 0.47),
+            pose_quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+        )
+    )
+    env = RealFrankaEnv(
+        config,
+        panda=FakePanda(),
+        gripper=FakeGripper(),
+        camera=SyntheticCamera(),
+        scene_camera=SyntheticCamera(width=96, height=64),
+        fk=fake_fk,
+    )
+    adapter = FrankaRealAdapter(env, allow_physical_motion=False)
+    adapter.reset("observe_station", 0)
+    observation = adapter.get_observation()
+    assert set(observation.cameras) == {"wrist", "scene"}
+    scene = observation.cameras["scene"]
+    assert scene.frame == "scene_camera"
+    assert scene.camera_pose.frame == "base"
+    assert np.allclose(scene.camera_pose.position, [0.52, 0.31, 0.47])
+    # The wrist pose rides the hand; the scene pose must not.
+    assert not np.allclose(
+        scene.camera_pose.position, observation.cameras["wrist"].camera_pose.position
+    )
