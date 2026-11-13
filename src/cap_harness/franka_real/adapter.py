@@ -9,11 +9,13 @@ commands -- every motion is a guarded waypoint batch through the Franka motion
 generator -- so ``step`` is a one-waypoint batch and a trajectory's ``dt_s``
 is advisory, recorded as such.
 
-``check_success`` returns False always: like the YAM, no task success
-predicate runs on this hardware *yet*. The bench this port grew on verifies
-stacking tasks by touch (a probe finds the pile one block taller), and wiring
-that in as a per-task predicate is the planned next step; until it lands, a
-run's success is judged from its artifacts by whoever ran it.
+``check_success`` is earned, not judged from the video: it re-observes the
+scene after the program ends and runs the task's physical postcondition from
+:mod:`cap_harness.franka_real.success` (top-face band centroids of the coloured
+blocks, heights the bench verified by touch). The measured evidence behind the
+verdict is written to the run's ``logs/success-report.json``; a predicate that
+cannot measure what it needs reports unknown there and the adapter returns the
+protocol's conservative ``False``.
 """
 
 from __future__ import annotations
@@ -69,6 +71,8 @@ class FrankaRealAdapter:
         self._run_observer = run_observer
         self._allow_physical_motion = bool(allow_physical_motion)
         self._task_context = task_context
+        self.last_success_report: dict[str, Any] = {}
+        """Evidence behind the most recent ``check_success`` verdict."""
         self._hand_eye = pose_to_matrix(
             Pose(
                 position=np.asarray(env.config.camera.hand_eye_position, dtype=np.float64),
@@ -400,8 +404,49 @@ class FrankaRealAdapter:
     # -- verdicts and metadata ---------------------------------------------
 
     def check_success(self) -> bool:
-        """No task success predicate runs on this hardware yet; see module docstring."""
-        return False
+        """Measure the task's postcondition; record the evidence; be conservative.
+
+        A fresh observation is taken (no motion), the task's predicate from
+        :mod:`~cap_harness.franka_real.success` runs on it, and the full report
+        -- which camera testified, what it measured, which criteria passed --
+        is written beside the run's logs. The protocol wants a bool, so an
+        unknown verdict (no predicate, or the scene could not be measured)
+        returns False; the report distinguishes "failed" from "could not tell".
+        """
+        from cap_harness.franka_real.success import evaluate_success
+
+        verdict: Optional[bool]
+        if self._task_context is None:
+            verdict, report = None, {"verdict": None, "note": "no task bound"}
+        else:
+            try:
+                observation = self.get_observation()
+            except Exception as exc:
+                verdict = None
+                report = {
+                    "task": self._task_context.task_name,
+                    "note": f"final observation failed: {type(exc).__name__}: {exc}",
+                }
+            else:
+                verdict, report = evaluate_success(
+                    self._task_context.task_name, observation, self._env.config
+                )
+        report["verdict"] = verdict
+        self.last_success_report = report
+        root = getattr(self._run_observer, "root", None)
+        if root is not None:
+            try:
+                import json
+                from pathlib import Path
+
+                logs = Path(root) / "logs"
+                logs.mkdir(parents=True, exist_ok=True)
+                (logs / "success-report.json").write_text(
+                    json.dumps(report, indent=1, default=str), encoding="utf-8"
+                )
+            except Exception:
+                pass  # the verdict stands even when the evidence cannot be filed
+        return bool(verdict)
 
     def get_task_metadata(self) -> dict[str, Any]:
         context = self._task_context

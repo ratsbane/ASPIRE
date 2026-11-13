@@ -377,6 +377,157 @@ def test_station_profile_round_trips_a_scene_camera(tmp_path):
     assert config.scene_camera.pose_position == (0.52, 0.31, 0.47)
 
 
+# -- earned success verdicts -------------------------------------------------
+
+
+def bench_state(q=HOME) -> RobotState:
+    return RobotState(
+        joint_positions={"primary": np.asarray(q, dtype=np.float64)},
+        joint_velocities={"primary": np.zeros(ARM_DOF)},
+        end_effector_poses={
+            "primary": Pose(
+                position=fake_fk(q)[:3, 3],
+                quaternion_wxyz=np.array([0.0, 1.0, 0.0, 0.0]),
+                frame="base",
+            )
+        },
+        gripper_positions={"primary": 1.0},
+        base_frame="base",
+        embodiment="franka_real",
+    )
+
+
+def topdown_observation(blocks, q=HOME, bleed_ring=None):
+    """A synthetic nadir view at (0.45, 0, 0.60): blocks as (x, y, top_z, half).
+
+    ``bleed_ring`` names a colour whose mask's outer pixels get the *table's*
+    depth: silhouette depth-bleed, the failure that smeared a live scene-camera
+    localization of a 55 mm block into a 225 mm point cloud.
+    """
+    from cap_harness.contracts import CameraObservation, Observation
+
+    cam_z, f, cx, cy = 0.60, 400.0, 320.0, 240.0
+    rgb = np.full((480, 640, 3), 120, dtype=np.uint8)
+    depth = np.full((480, 640), cam_z - 0.017)
+    colours = {"red": (200, 40, 40), "green": (40, 200, 40), "blue": (40, 50, 200)}
+    for key, (x, y, top_z, half) in blocks.items():
+        colour = key.rstrip("0123456789")  # "blue2": a second blob of the same colour
+        z = cam_z - top_z  # camera x = world x - 0.45, camera y = -world y
+        u0 = int(cx + (x - half - 0.45) / z * f)
+        u1 = int(cx + (x + half - 0.45) / z * f)
+        v0 = int(cy + (-y - half) / z * f)
+        v1 = int(cy + (-y + half) / z * f)
+        rgb[v0:v1, u0:u1] = colours[colour]
+        depth[v0:v1, u0:u1] = z
+        if colour == bleed_ring:
+            ring = np.full((480, 640), False)
+            ring[v0:v1, u0:u1] = True
+            ring[v0 + 4 : v1 - 4, u0 + 4 : u1 - 4] = False
+            depth[ring] = cam_z - 0.017
+    camera = CameraObservation(
+        rgb=rgb,
+        depth_m=depth,
+        intrinsics=np.array([[f, 0, cx], [0, f, cy], [0, 0, 1.0]]),
+        frame="wrist_camera",
+        camera_pose=Pose(  # 180 deg about x: optical +z looks straight down
+            position=np.array([0.45, 0.0, cam_z]),
+            quaternion_wxyz=np.array([0.0, 1.0, 0.0, 0.0]),
+            frame="base",
+        ),
+    )
+    return Observation(cameras={"wrist": camera}, robot_state=bench_state(q))
+
+
+def test_stack_verdict_measures_height_and_survives_depth_bleed():
+    from cap_harness.franka_real.success import evaluate_success
+
+    observation = topdown_observation({
+        "green": (0.46, -0.156, 0.044, 0.022),  # exposed ring under blue
+        "blue": (0.46, -0.156, 0.071, 0.014),   # pile height, painted on top
+    }, bleed_ring="blue")
+    config = FrankaStationConfig()
+    verdict, report = evaluate_success("stack_blocks", observation, config)
+    assert verdict is True, report
+    assert report["blue"]["top_z"] == pytest.approx(0.071, abs=0.004)
+    assert report["blue_to_green_m"] < 0.02
+    # The same scene is not an unstack.
+    verdict, report = evaluate_success("unstack_blocks", observation, config)
+    assert verdict is False and report["blue_down"] is False
+
+
+def test_unstack_verdict_wants_blue_down_and_clear_of_green():
+    from cap_harness.franka_real.success import evaluate_success
+
+    observation = topdown_observation({
+        "green": (0.46, -0.156, 0.044, 0.014),
+        "blue": (0.37, 0.10, 0.044, 0.014),
+        # A bigger blue blob outside the workspace box: the first live verdict
+        # elected 8572 px of something blue at the robot's base over the block.
+        "blue2": (0.10, 0.0, 0.12, 0.030),
+    })
+    config = FrankaStationConfig()
+    verdict, report = evaluate_success("unstack_blocks", observation, config)
+    assert verdict is True, report
+    assert report["blue"]["position"][0] == pytest.approx(0.37, abs=0.01)
+    assert report["blue_to_green_m"] == pytest.approx(0.272, abs=0.02)
+    verdict, _ = evaluate_success("stack_blocks", observation, config)
+    assert verdict is False
+
+
+def test_move_red_verdict_wants_red_resting_on_clear_table():
+    from cap_harness.franka_real.success import evaluate_success
+
+    config = FrankaStationConfig()
+    clear = topdown_observation({
+        "red": (0.40, -0.05, 0.044, 0.014),
+        "green": (0.55, 0.20, 0.044, 0.014),
+        "blue": (0.30, 0.25, 0.044, 0.014),
+    })
+    verdict, report = evaluate_success("move_red", clear, config)
+    assert verdict is True, report
+
+    crowded = topdown_observation({
+        "red": (0.52, 0.17, 0.044, 0.014),
+        "green": (0.55, 0.20, 0.044, 0.014),
+    })
+    verdict, report = evaluate_success("move_red", crowded, config)
+    assert verdict is False and report["clear_of_others"] is False
+
+
+def test_reach_home_verdict_reads_the_measured_joints():
+    from cap_harness.franka_real.success import evaluate_success
+
+    config = FrankaStationConfig()
+    verdict, _ = evaluate_success("reach_home", topdown_observation({}, q=HOME), config)
+    assert verdict is True
+    away = topdown_observation({}, q=HOME + 0.2)
+    verdict, report = evaluate_success("reach_home", away, config)
+    assert verdict is False and report["max_joint_deviation_rad"] > 0.1
+
+
+def test_check_success_files_its_evidence_with_the_run(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    env = RealFrankaEnv(
+        FrankaStationConfig(),
+        panda=FakePanda(),
+        gripper=FakeGripper(),
+        camera=SyntheticCamera(),
+        fk=fake_fk,
+    )
+    adapter = FrankaRealAdapter(
+        env, allow_physical_motion=False, run_observer=SimpleNamespace(root=tmp_path)
+    )
+    adapter.reset("stack_blocks", 0)
+    verdict = adapter.check_success()
+    assert isinstance(verdict, bool)
+    report = json.loads((tmp_path / "logs" / "success-report.json").read_text())
+    assert report["task"] == "stack_blocks"
+    assert bool(report["verdict"]) == verdict
+    assert adapter.last_success_report["task"] == "stack_blocks"
+
+
 def test_observation_carries_both_cameras_when_the_station_has_two():
     from cap_harness.franka_real.config import FrankaSceneCameraConfig
 
