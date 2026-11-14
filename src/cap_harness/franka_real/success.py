@@ -72,19 +72,25 @@ SLAB_CROSS_HALF_M = 0.025
 
 
 def locate_colour_top(
-    observation: Observation, colour: str, workspace: Any = None
+    observation: Observation, colour: str, workspace: Any = None, near_xy: Any = None
 ) -> Optional[dict[str, Any]]:
     """Base-frame top-face centroid of a colour, from the first camera that sees it.
 
     With a ``workspace`` box, a blob whose centroid lands outside it is passed
     over for the next-largest: the first live verdict elected 8572 px of
     something blue at the robot's base over the 55 mm block on the table.
+
+    With ``near_xy``, the plausible candidate closest to that point wins
+    instead of the largest. A relation predicate ("is blue ON green") must ask
+    for the green nearest blue: the bench grew a second green block and the
+    big, fully visible one at the pick target out-pixelled the pile's green,
+    which shows only its edges beneath a stacked blue (found live).
     """
     for role in CAMERA_PREFERENCE:
         camera = observation.cameras.get(role)
         if camera is None or camera.depth_m is None or camera.camera_pose is None:
             continue
-        found = _top_centroid_in_base(camera, colour, workspace)
+        found = _top_centroid_in_base(camera, colour, workspace, near_xy)
         if found is not None:
             found["camera"] = role
             return found
@@ -92,7 +98,7 @@ def locate_colour_top(
 
 
 def _top_centroid_in_base(
-    camera: Any, colour: str, workspace: Any = None
+    camera: Any, colour: str, workspace: Any = None, near_xy: Any = None
 ) -> Optional[dict[str, Any]]:
     from scipy import ndimage
 
@@ -113,6 +119,7 @@ def _top_centroid_in_base(
     )
     points_all = back_project(depth, np.asarray(camera.intrinsics))
     transform = pose_to_matrix(camera.camera_pose)
+    candidates = []
     for size, label in ranked[:5]:
         points = points_all[labels == label] @ transform[:3, :3].T + transform[:3, 3]
         points = points[np.isfinite(points).all(axis=1)]
@@ -129,14 +136,25 @@ def _top_centroid_in_base(
         centroid = band.mean(axis=0)
         if workspace is not None and not workspace.contains(centroid):
             continue
-        return {
+        candidates.append({
             "colour": colour,
             "position": [round(float(v), 4) for v in centroid],
             "top_z": round(top_z, 4),
             "pixels": size,
             "band_points": int(band.shape[0]),
-        }
-    return None
+        })
+        if near_xy is None:
+            break  # largest plausible wins; no need to rank the rest
+    if not candidates:
+        return None
+    if near_xy is None:
+        return candidates[0]
+    return min(
+        candidates,
+        key=lambda c: math.hypot(
+            c["position"][0] - float(near_xy[0]), c["position"][1] - float(near_xy[1])
+        ),
+    )
 
 
 #: For slab occupancy the preference inverts: the fixed scene camera's table
@@ -218,12 +236,17 @@ def evaluate_success(
 
     if task_name == "stack_blocks":
         blue = locate_colour_top(observation, "blue", config.workspace)
-        green = locate_colour_top(observation, "green", config.workspace)
         report["blue"] = blue
-        report["green"] = green
         if blue is None:
-            report["note"] = "blue block not seen by any camera"
+            report["note"] = "green witness not sought; blue block not seen"
+            report["green"] = None
             return None, report
+        # The green that answers "is blue ON green" is the one nearest blue;
+        # a second green block elsewhere on the bench must not testify here.
+        green = locate_colour_top(
+            observation, "green", config.workspace, near_xy=blue["position"][:2]
+        )
+        report["green"] = green
         stacked_height = blue["top_z"] >= STACKED_TOP_MIN_M
         report["stacked_height"] = stacked_height
         if green is not None:
@@ -239,8 +262,14 @@ def evaluate_success(
 
     if task_name == "unstack_blocks":
         blue = locate_colour_top(observation, "blue", config.workspace)
-        green = locate_colour_top(observation, "green", config.workspace)
         report["blue"] = blue
+        # Nearest green to blue is the conservative witness here too: a far
+        # second green would pass the "clear of green" check for free.
+        green = None
+        if blue is not None:
+            green = locate_colour_top(
+                observation, "green", config.workspace, near_xy=blue["position"][:2]
+            )
         report["green"] = green
         if blue is None or green is None:
             report["note"] = "unstacking exposes both blocks; one was not seen"

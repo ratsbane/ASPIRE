@@ -599,6 +599,38 @@ def test_stack_verdict_measures_height_and_survives_depth_bleed():
     assert verdict is False and report["blue_down"] is False
 
 
+def test_relation_verdicts_ask_for_the_green_nearest_blue():
+    """Live failure 2026-11-14: a second green block (picked from the basket,
+    standing fully visible at the pick target) out-pixelled the pile's green,
+    which shows only its edges under a stacked blue. The biggest green then
+    testified 'blue is 0.105 from green' on an intact stack. A relation
+    predicate must match blue to the green nearest it; and for unstack the
+    same choice is conservative, since a far second green would pass the
+    'clear of green' check for free."""
+    from cap_harness.franka_real.success import UNSTACK_CLEAR_M, evaluate_success
+
+    config = FrankaStationConfig()
+    stacked = topdown_observation({
+        "green": (0.46, -0.156, 0.044, 0.022),   # the pile's green: edge ring
+        "blue": (0.46, -0.156, 0.071, 0.014),
+        "green2": (0.34, -0.20, 0.072, 0.020),   # the standing block, bigger
+    }, bleed_ring="blue")
+    verdict, report = evaluate_success("stack_blocks", stacked, config)
+    assert verdict is True, report
+    assert report["blue_to_green_m"] < 0.02
+
+    # Blue sitting alone right beside the pile's green is NOT unstacked, even
+    # though it is far from the second green.
+    beside = topdown_observation({
+        "green": (0.46, -0.156, 0.044, 0.014),
+        "blue": (0.50, -0.156, 0.044, 0.014),
+        "green2": (0.34, -0.20, 0.072, 0.020),
+    })
+    verdict, report = evaluate_success("unstack_blocks", beside, config)
+    assert verdict is False, report
+    assert report["blue_to_green_m"] < UNSTACK_CLEAR_M
+
+
 def test_unstack_verdict_wants_blue_down_and_clear_of_green():
     from cap_harness.franka_real.success import evaluate_success
 
@@ -676,8 +708,12 @@ def test_clutter_example_programs_pass_the_sandbox_validator():
     from cap_harness.runtime import _ProgramValidator
 
     examples = Path(__file__).resolve().parent.parent / "examples" / "franka_real"
-    for name in ("pick_from_clutter", "build_wall"):
-        source = (examples / name / f"{name}.py").read_text()
+    for relative in (
+        "pick_from_clutter/pick_from_clutter.py",
+        "build_wall/build_wall.py",
+        "stack_blocks/shove_stack.py",
+    ):
+        source = (examples / relative).read_text()
         _ProgramValidator().visit(ast.parse(source))  # raises on a violation
 
 
