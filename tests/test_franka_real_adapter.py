@@ -712,6 +712,8 @@ def test_clutter_example_programs_pass_the_sandbox_validator():
         "pick_from_clutter/pick_from_clutter.py",
         "build_wall/build_wall.py",
         "stack_blocks/shove_stack.py",
+        "stack_blocks/sort_colours.py",
+        "stack_blocks/observe.py",
     ):
         source = (examples / relative).read_text()
         _ProgramValidator().visit(ast.parse(source))  # raises on a violation
