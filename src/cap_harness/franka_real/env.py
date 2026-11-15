@@ -30,6 +30,25 @@ from cap_harness.yam_real.cameras import Camera, CameraFrame
 
 ARM_DOF = 7
 
+# Contact descent. The trigger is the one the bench this port grew on settled
+# on after three predecessors broke: geometric contact is a *rate*, not a
+# level. Controller lag drifts with arm configuration and a gravity-model
+# force estimate under-reads in the same configurations, but neither ever
+# *stops* the hand; a surface does. So contact is the hand's own descent rate
+# collapsing below a fraction of the commanded speed (or a force rise, when
+# the estimate is honest), sustained, and only after an initial travel that
+# clears the controller's engagement transient.
+CONTACT_DT_S = 0.01
+CONTACT_BASELINE_START_TICKS = 30  # skip the engagement transient, then
+CONTACT_BASELINE_END_TICKS = 50  # zero the force estimate over the next 0.2 s
+CONTACT_SUSTAIN_TICKS = 5  # a release is irreversible; one noisy sample must not cause it
+CONTACT_VELOCITY_FRACTION = 0.25
+CONTACT_VELOCITY_WINDOW_S = 0.10
+CONTACT_GUARD_TRAVEL_M = 0.018  # no verdict before the command has sunk this far
+CONTACT_UNLOAD_TICKS = 30  # ease the command back up to the contact height
+CONTACT_MIN_DESCENT_M = 0.025  # the guard travel plus room to measure a rate
+CONTACT_MAX_SPEED_M_S = 0.05
+
 
 class RealFrankaEnv:
     """Single-arm Franka plant behind one actuation chokepoint."""
@@ -43,6 +62,7 @@ class RealFrankaEnv:
         camera: Optional[Camera],
         fk: Callable[[np.ndarray], np.ndarray],
         scene_camera: Optional[Camera] = None,
+        impedance_controller: Optional[Callable[[], Any]] = None,
     ) -> None:
         self.config = config
         self._panda = panda
@@ -50,6 +70,8 @@ class RealFrankaEnv:
         self._camera = camera
         self._scene_camera = scene_camera
         self._fk = fk
+        self._impedance_controller = impedance_controller
+        """Factory for a panda_py CartesianImpedance controller; tests inject a fake."""
         self._closed = False
         self._gripper_holding = False
         self.motions_executed = 0
@@ -198,6 +220,145 @@ class RealFrankaEnv:
             "speed_factor": factor,
             "elapsed_s": round(time.monotonic() - started, 3),
             "retimed_by": "panda_py_motion_generator",
+        }
+
+    def _make_impedance_controller(self) -> Any:
+        if self._impedance_controller is not None:
+            return self._impedance_controller()
+        from panda_py import controllers
+
+        return controllers.CartesianImpedance()
+
+    def descend_until_contact(
+        self,
+        *,
+        floor_z: float,
+        speed_m_s: Optional[float] = None,
+        contact_force_n: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Lower the hand straight down until it meets something, or the floor.
+
+        The second, and only other, way this package moves the arm. The motion
+        generator behind :meth:`execute_waypoints` is open-loop and contact-
+        blind: a place commanded to a camera-measured height meets the table a
+        few millimetres early and the collision reflex aborts the move (three
+        of four live placements, 2026-11-14/15). Here the hand rides a
+        cartesian impedance controller whose command sinks at a steady rate
+        from the current pose, in the current x, y and orientation, and stops
+        when the hand stops following it (see the module constants for the
+        trigger), then eases the command back to the contact height so a
+        release does not let the stored spring drive the hand on. The floor is
+        the stop for a miss, not the target: a caller puts it well below the
+        contact it expects, and the workspace box bounds it like any waypoint.
+        """
+        speed = float(
+            speed_m_s if speed_m_s is not None else self.config.contact_descent_speed_m_s
+        )
+        force_limit = float(
+            contact_force_n if contact_force_n is not None else self.config.contact_force_n
+        )
+        if not 0.0 < speed <= CONTACT_MAX_SPEED_M_S:
+            raise ValueError(f"descent speed must be in (0, {CONTACT_MAX_SPEED_M_S}] m/s")
+        if force_limit <= 0.0:
+            raise ValueError("contact force must be positive")
+        floor_z = float(floor_z)
+        q = np.asarray(self._panda.get_state().q, dtype=np.float64).reshape(ARM_DOF)
+        here = self.fk_matrix(q)[:3, 3]
+        if not self.config.workspace.contains([here[0], here[1], floor_z]):
+            raise ValueError(
+                f"floor {floor_z:.3f} m is outside the workspace box at "
+                f"x={here[0]:.3f}, y={here[1]:.3f}"
+            )
+        start_z = float(here[2])
+        if start_z - floor_z < CONTACT_MIN_DESCENT_M:
+            raise ValueError(
+                f"the hand at z={start_z:.3f} m is within {CONTACT_MIN_DESCENT_M} m of the "
+                f"floor {floor_z:.3f} m; start the descent higher"
+            )
+        controller = self._make_impedance_controller()
+        controller.set_impedance(np.diag([400.0, 400.0, 300.0, 30.0, 30.0, 30.0]))
+        controller.set_nullspace_stiffness(1.0)
+        # The controller commands in its own pose readout; the guard above
+        # judged the floor by the same forward kinematics every waypoint gets.
+        position = np.asarray(self._panda.get_position(), dtype=np.float64)
+        x, y = float(position[0]), float(position[1])
+        orientation = self._panda.get_orientation()
+        tz = float(position[2])
+        actual = tz
+        guard_z = tz - CONTACT_GUARD_TRAVEL_M
+        window = max(2, int(CONTACT_VELOCITY_WINDOW_S / CONTACT_DT_S))
+        fz0 = float(self._panda.get_state().O_F_ext_hat_K[2])
+        baseline: list[float] = []
+        recent: list[float] = []
+        settle = 0
+        above = 0
+        unload_ticks = 0
+        peak_rise = 0.0
+        contact_z: Optional[float] = None
+        stop = "timeout"
+        runtime = (tz - floor_z) / speed + 2.0
+        started = time.monotonic()
+        self._panda.start_controller(controller)
+        try:
+            with self._panda.create_context(
+                frequency=int(round(1.0 / CONTACT_DT_S)), max_runtime=runtime
+            ) as context:
+                while context.ok():
+                    actual = float(self._panda.get_position()[2])
+                    if contact_z is not None:
+                        tz = min(
+                            contact_z,
+                            tz + (contact_z - tz) / max(CONTACT_UNLOAD_TICKS - unload_ticks, 1),
+                        )
+                        controller.set_control(np.array([x, y, tz]), orientation, q)
+                        unload_ticks += 1
+                        if unload_ticks >= CONTACT_UNLOAD_TICKS:
+                            break
+                        continue
+                    tz = max(floor_z, tz - speed * CONTACT_DT_S)
+                    controller.set_control(np.array([x, y, tz]), orientation, q)
+                    fz = float(self._panda.get_state().O_F_ext_hat_K[2])
+                    if settle < CONTACT_BASELINE_END_TICKS:
+                        settle += 1
+                        if settle > CONTACT_BASELINE_START_TICKS:
+                            baseline.append(fz)
+                        continue
+                    if baseline:
+                        fz0, baseline = float(np.mean(baseline)), []
+                    recent.append(actual)
+                    if len(recent) > window:
+                        recent.pop(0)
+                    descending = (
+                        (recent[0] - actual) / (CONTACT_DT_S * (len(recent) - 1))
+                        if len(recent) == window
+                        else speed
+                    )
+                    rise = abs(fz - fz0)
+                    peak_rise = max(peak_rise, rise)
+                    stalled = descending < CONTACT_VELOCITY_FRACTION * speed
+                    above = above + 1 if (stalled or rise > force_limit) else 0
+                    if tz < guard_z and above >= CONTACT_SUSTAIN_TICKS:
+                        contact_z = actual
+                        stop = "contact"
+                        continue
+                    if tz <= floor_z + 1e-4:
+                        stop = "floor"
+                        break
+        finally:
+            self._panda.stop_controller()
+        self.motions_executed += 1
+        end_z = contact_z if contact_z is not None else actual
+        return {
+            "contact": contact_z is not None,
+            "contact_z": None if contact_z is None else round(contact_z, 4),
+            "start_z": round(start_z, 4),
+            "floor_z": round(floor_z, 4),
+            "travel_m": round(start_z - end_z, 4),
+            "stop": stop,
+            "force_rise_n": round(peak_rise, 2),
+            "speed_m_s": speed,
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "controller": "panda_py_cartesian_impedance",
         }
 
     def move_home(self, *, speed_factor: Optional[float] = None) -> dict[str, Any]:

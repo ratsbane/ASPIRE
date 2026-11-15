@@ -4,7 +4,12 @@ TABLE_Z = 0.017
 GRASP_OFFSET = 0.017
 BLOCK_LONG_M = 0.055
 BLOCK_FLAT_M = 0.028
-RELEASE_GAP_M = 0.003
+# Placing is by contact: the descent starts this far above the expected
+# contact height and stops when the hand stops sinking; the floor, this far
+# below, is the stop for a miss. Open-loop lowering to a measured height fired
+# the cartesian reflex on three of four live placements.
+PRE_PLACE_ABOVE_M = 0.03
+FLOOR_BELOW_M = 0.015
 CARRY_Z = 0.22
 LONG_MOVE_STEPS = 600
 GRASP_TRIES_PER_SLOT = 2
@@ -50,14 +55,14 @@ def is_flat(block):
     return block["footprint"] >= 0.045
 
 
-def place_ee_z(block):
-    """Preserve the held block's bottom clearance instead of assuming flat.
+def contact_ee_z(block):
+    """Where the hand should meet the table with this block in it.
 
     Live lesson from the first clutter pick: a block grasped standing on end
     hangs 55 mm below the top, not 28, and lowering it to flat-block height
     drove its bottom into the table and fired the cartesian reflex."""
     vertical = BLOCK_FLAT_M if is_flat(block) else BLOCK_LONG_M
-    return TABLE_Z + (vertical - GRASP_OFFSET) + RELEASE_GAP_M
+    return TABLE_Z + (vertical - GRASP_OFFSET)
 
 
 def survey(x, y):
@@ -179,9 +184,12 @@ for index in range(SLOTS):
     must(move_to_pose({"position": [sx, sy, CARRY_Z], "frame": "base",
                        "quaternion_wxyz": place_quat}, max_steps=LONG_MOVE_STEPS),
          "carry")
-    must(move_to_pose({"position": [sx, sy, place_ee_z(block)], "frame": "base",
+    expect_z = contact_ee_z(block)
+    must(move_to_pose({"position": [sx, sy, expect_z + PRE_PLACE_ABOVE_M], "frame": "base",
                        "quaternion_wxyz": place_quat}, max_steps=LONG_MOVE_STEPS),
-         "lower")
+         "pre_place")
+    touch = franka_real.descend_to_contact(floor_z=max(expect_z - FLOOR_BELOW_M, 0.004))
+    must(touch, "lower")
     set_gripper(min(1.0, grip + 0.2))
     must(move_to_pose({"position": [sx, sy, CARRY_Z], "frame": "base",
                        "quaternion_wxyz": place_quat}, max_steps=LONG_MOVE_STEPS),

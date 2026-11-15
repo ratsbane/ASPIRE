@@ -4,7 +4,12 @@ TABLE_Z = 0.017
 GRASP_OFFSET = 0.017  # fingers engage this far below a block's measured top
 BLOCK_LONG_M = 0.055
 BLOCK_FLAT_M = 0.028
-RELEASE_GAP_M = 0.003
+# Placing is by contact: the descent starts this far above the expected
+# contact height and stops when the hand stops sinking; the floor, this far
+# below, is the stop for a miss. Open-loop lowering to a measured height fired
+# the cartesian reflex on three of four live placements.
+PRE_PLACE_ABOVE_M = 0.03
+FLOOR_BELOW_M = 0.015
 CARRY_Z = 0.22
 LONG_MOVE_STEPS = 600
 MAX_ATTEMPTS = 3
@@ -41,8 +46,8 @@ def box_yaw(geometry):
     return math.atan2(float(matrix[1, axis]), float(matrix[0, axis]))
 
 
-def place_ee_z(block):
-    """Place height that preserves the held block's bottom clearance.
+def contact_ee_z(block):
+    """Where the hand should meet the table with this block in it.
 
     The first live pick grabbed a block standing on end and lowered it to the
     flat-block height; its bottom hit the table 25 mm early and the cartesian
@@ -50,7 +55,7 @@ def place_ee_z(block):
     hangs: a footprint showing the long side lies flat (28 mm tall in hand),
     anything narrower stands on end (55 mm)."""
     vertical = BLOCK_FLAT_M if block["footprint"] >= 0.045 else BLOCK_LONG_M
-    return TABLE_Z + (vertical - GRASP_OFFSET) + RELEASE_GAP_M
+    return TABLE_Z + (vertical - GRASP_OFFSET)
 
 
 def survey(x, y):
@@ -166,9 +171,12 @@ elif held_block is not None:
                       max_steps=LONG_MOVE_STEPS), "rise")
     must(move_to_pose({"position": [TARGET[0], TARGET[1], CARRY_Z], "frame": "base",
                        "quaternion_wxyz": quat}, max_steps=LONG_MOVE_STEPS), "carry")
-    must(move_to_pose({"position": [TARGET[0], TARGET[1], place_ee_z(held_block)],
+    expect_z = contact_ee_z(held_block)
+    must(move_to_pose({"position": [TARGET[0], TARGET[1], expect_z + PRE_PLACE_ABOVE_M],
                        "frame": "base", "quaternion_wxyz": quat},
-                      max_steps=LONG_MOVE_STEPS), "lower")
+                      max_steps=LONG_MOVE_STEPS), "pre_place")
+    touch = franka_real.descend_to_contact(floor_z=max(expect_z - FLOOR_BELOW_M, 0.004))
+    must(touch, "lower")
     set_gripper(min(1.0, held + 0.2))
     must(move_to_pose({"position": [TARGET[0], TARGET[1], CARRY_Z], "frame": "base",
                        "quaternion_wxyz": quat}, max_steps=LONG_MOVE_STEPS), "retreat")
@@ -185,6 +193,7 @@ elif held_block is not None:
     result = {"ok": bool(placed), "stage": "placed" if placed else "not_verified",
               "target": TARGET, "attempts": attempt,
               "orientation": "flat" if held_block["footprint"] >= 0.045 else "standing",
+              "contact": bool(touch.ok and touch.diagnostics["contact"]),
               "picked_from": [round(held_block["x"], 4), round(held_block["y"], 4),
                               round(held_block["top"], 4)],
               "found_at": None if nearest is None else

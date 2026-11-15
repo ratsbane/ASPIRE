@@ -302,6 +302,7 @@ class ProgramExecutor:
             "open_gripper",
             "close_gripper",
             "go_home",
+            "franka_real.descend_to_contact",
         }
         if motion:
             self._recorder.keyframe(f"before-{name}")  # type: ignore[attr-defined]

@@ -31,9 +31,15 @@ report `wall_blocked`: a partial wall beats a bumped basket.
    attempts per slot), carry high, place at the slot centre with the wall's
    yaw, release narrow, retreat. Prefer candidates whose scanned footprint
    shows the long side (lying flat); when only standing blocks remain, take
-   one, place it at its own height (its bottom hangs 55 mm below the top,
-   not 28 -- the flat-height assumption fired the cartesian reflex live) and
-   report the orientation honestly.
+   one, expect contact at its own height (its bottom hangs 55 mm below the
+   top, not 28 -- the flat-height assumption fired the cartesian reflex live)
+   and report the orientation honestly. Place by contact, never by height:
+   `move_to_pose` to about 3 cm above the expected contact, then
+   `franka_real.descend_to_contact(floor_z=...)` with the floor 1-2 cm below
+   it, and release when it reports contact. Open-loop lowering to a measured
+   height met the table early and fired the reflex on three of four live
+   placements; a floor stop with a block in hand is news to report, not a
+   place.
 2. Verify each placement by re-segmenting above the slot: a block instance
    within 0.03 m of the slot centre. Record the measured position; a slot
    that cannot be verified is reported, not papered over.

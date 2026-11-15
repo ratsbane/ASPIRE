@@ -76,7 +76,11 @@ YAM_REAL_PUBLIC_TOOL_NAMES = frozenset(
 )
 
 FRANKA_REAL_PUBLIC_TOOL_NAMES = frozenset(
-    {"franka_real.get_task_metadata", "franka_real.get_controller_metadata"}
+    {
+        "franka_real.get_task_metadata",
+        "franka_real.get_controller_metadata",
+        "franka_real.descend_to_contact",
+    }
 )
 
 _APPROVED_EMBODIMENT_PREFIXES = (

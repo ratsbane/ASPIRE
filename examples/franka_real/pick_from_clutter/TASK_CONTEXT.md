@@ -41,12 +41,16 @@ for one block.
    motion -- the box walls are obstacles the workspace guard does not know.
 5. A close on air means the block was shoved: open, re-survey, re-choose, at
    most three attempts.
-6. Carry high, place at a height that preserves the held block's bottom
-   clearance: the scan's footprint says how the block hangs (a footprint
-   showing the long ~55 mm side lies flat, 28 mm tall in hand; a narrower
-   footprint stands on end, 55 mm tall), and lowering a standing block to
-   flat-block height drives it into the table and fires the cartesian reflex
-   (measured live on the first pick). Release narrow, retreat, verify by
+6. Carry high and place by contact, never by height. The scan's footprint
+   says how the block hangs (a footprint showing the long ~55 mm side lies
+   flat, 28 mm tall in hand; a narrower footprint stands on end, 55 mm tall)
+   and so where contact is expected; `move_to_pose` to about 3 cm above
+   that, then `franka_real.descend_to_contact(floor_z=...)` with the floor
+   1-2 cm below it, and release when it reports contact. Lowering open-loop
+   to a measured height met the table early and fired the cartesian reflex
+   on three of four live placements (a standing block lowered to flat-block
+   height by 25 mm; a flat one by a few). A floor stop with a block in hand
+   is news to report, not a place. Release narrow, retreat, verify by
    re-segmenting above the target: success is a block instance within 0.03 m
    of it. Report what was measured, including the block's orientation.
 

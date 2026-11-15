@@ -405,6 +405,56 @@ class FrankaRealAdapter:
             ok=True, steps_executed=1, final_observation=self.get_observation()
         )
 
+    def descend_to_contact(
+        self,
+        *,
+        floor_z: float,
+        speed_m_s: float | None = None,
+        contact_force_n: float | None = None,
+    ) -> ExecutionResult:
+        """Lower the hand straight down until it meets something, or the floor.
+
+        Exposed to programs as ``franka_real.descend_to_contact``. A place that
+        trusts a camera-measured height is a gamble against the sum of depth
+        bias, grasp seating and the table plane; this primitive makes the last
+        centimetre closed-loop instead (see
+        :meth:`RealFrankaEnv.descend_until_contact`). ``ok`` says the descent
+        ran as commanded; whether it ended on contact or at the floor is in the
+        diagnostics, because a floor stop under a held block is the caller's
+        news to act on, not an execution failure.
+        """
+        denied = self._motion_denied()
+        if denied is not None:
+            return ExecutionResult(ok=False, steps_executed=0, error=denied)
+        try:
+            report = self._env.descend_until_contact(
+                floor_z=floor_z, speed_m_s=speed_m_s, contact_force_n=contact_force_n
+            )
+        except ValueError as exc:
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(
+                    code=ErrorCode.SAFETY_INTERLOCK,
+                    message=f"contact descent refused: {exc}",
+                    recoverable=True,
+                ),
+            )
+        except Exception as exc:  # libfranka reflexes, network, limits
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(
+                    code=ErrorCode.CONTROLLER_FAILED, message=f"{type(exc).__name__}: {exc}"
+                ),
+            )
+        return ExecutionResult(
+            ok=True,
+            steps_executed=1,
+            final_observation=self.get_observation(),
+            diagnostics=report,
+        )
+
     # -- verdicts and metadata ---------------------------------------------
 
     def check_success(self) -> bool:

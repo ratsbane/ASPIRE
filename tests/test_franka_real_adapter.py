@@ -40,18 +40,85 @@ def fake_fk(q: np.ndarray) -> np.ndarray:
 
 
 class FakeState:
-    def __init__(self, q):
+    def __init__(self, q, fz=0.0):
         self.q = list(q)
         self.dq = [0.0] * ARM_DOF
+        self.O_F_ext_hat_K = [0.0, 0.0, fz, 0.0, 0.0, 0.0]
+
+
+class FakeContext:
+    """A panda_py control context that ticks a fixed number of times, instantly."""
+
+    def __init__(self, ticks):
+        self.ticks = ticks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def ok(self):
+        self.ticks -= 1
+        return self.ticks >= 0
+
+
+class FakeImpedanceController:
+    def __init__(self, panda):
+        self.panda = panda
+        self.commands = []
+
+    def set_impedance(self, matrix):
+        self.stiffness_z = float(np.asarray(matrix)[2, 2])
+
+    def set_nullspace_stiffness(self, value):
+        pass
+
+    def set_control(self, position, orientation, q_nullspace):
+        self.commands.append(np.asarray(position, dtype=np.float64))
+        self.panda.commanded = np.asarray(position, dtype=np.float64)
 
 
 class FakePanda:
+    """Joint batches land exactly; under impedance control the hand follows the
+    command until an optional surface stops it, pushing back at 300 N/m."""
+
     def __init__(self):
         self.q = np.array(HOME)
         self.batches = []
+        self.surface_z = None
+        self.commanded = None
+        self.controller = None
 
     def get_state(self):
-        return FakeState(self.q)
+        fz = 0.0
+        if (
+            self.commanded is not None
+            and self.surface_z is not None
+            and self.commanded[2] < self.surface_z
+        ):
+            fz = 300.0 * (self.surface_z - self.commanded[2])
+        return FakeState(self.q, fz)
+
+    def get_position(self):
+        here = fake_fk(self.q)[:3, 3].copy()
+        if self.commanded is not None:
+            here = self.commanded.copy()
+            if self.surface_z is not None:
+                here[2] = max(here[2], self.surface_z)
+        return here
+
+    def get_orientation(self):
+        return np.array([0.0, 1.0, 0.0, 0.0])
+
+    def start_controller(self, controller):
+        self.controller = controller
+
+    def stop_controller(self):
+        self.controller = None
+
+    def create_context(self, frequency, max_runtime):
+        return FakeContext(int(frequency * max_runtime))
 
     def move_to_joint_position(self, waypoints, speed_factor=0.1):
         self.batches.append((np.asarray(waypoints, dtype=np.float64), speed_factor))
@@ -83,12 +150,14 @@ class FakeGripper:
 
 
 def build(allow_motion: bool = True):
+    panda = FakePanda()
     env = RealFrankaEnv(
         FrankaStationConfig(),
-        panda=FakePanda(),
+        panda=panda,
         gripper=FakeGripper(),
         camera=SyntheticCamera(),
         fk=fake_fk,
+        impedance_controller=lambda: FakeImpedanceController(panda),
     )
     adapter = FrankaRealAdapter(env, allow_physical_motion=allow_motion)
     adapter.reset("stack_blocks", 0)
@@ -314,7 +383,51 @@ def test_extension_tools_register_under_the_approved_prefix():
     names = {spec.name for spec in registry.all_specs(public_only=True)}
     assert "franka_real.get_task_metadata" in names
     assert "franka_real.get_controller_metadata" in names
+    assert "franka_real.descend_to_contact" in names
     assert "move_to_pose" in names
+
+
+def test_contact_descent_stops_on_a_surface_and_unloads():
+    env, adapter = build()
+    env._panda.surface_z = 0.26  # a block top 4 cm under the hand at home
+    result = adapter.descend_to_contact(floor_z=0.25)
+    assert result.ok, result.error
+    report = result.diagnostics
+    assert report["contact"] is True
+    assert report["stop"] == "contact"
+    assert abs(report["contact_z"] - 0.26) < 0.003
+    assert abs(report["travel_m"] - 0.04) < 0.003
+    # The controller is released, the motion is counted, and the unload eased
+    # the command back up to the surface so a release does not spring the hand on.
+    assert env._panda.controller is None
+    assert env.motions_executed == 1
+    assert abs(float(env._panda.commanded[2]) - 0.26) < 0.002
+
+
+def test_contact_descent_reaches_the_floor_in_free_air():
+    env, adapter = build()
+    result = adapter.descend_to_contact(floor_z=0.25)
+    assert result.ok, result.error
+    report = result.diagnostics
+    assert report["contact"] is False
+    assert report["stop"] == "floor"
+    assert abs(report["travel_m"] - 0.05) < 0.003
+
+
+def test_contact_descent_is_guarded_like_a_waypoint():
+    env, adapter = build()
+    below_box = adapter.descend_to_contact(floor_z=0.0)
+    assert not below_box.ok
+    assert below_box.error.code == ErrorCode.SAFETY_INTERLOCK
+    too_close = adapter.descend_to_contact(floor_z=0.29)
+    assert not too_close.ok
+    assert "start the descent higher" in too_close.error.message
+    assert env.motions_executed == 0
+
+    _, locked = build(allow_motion=False)
+    denied = locked.descend_to_contact(floor_z=0.25)
+    assert not denied.ok
+    assert denied.error.code == ErrorCode.SAFETY_INTERLOCK
 
 
 def test_ik_provider_round_trips_through_the_same_fk():

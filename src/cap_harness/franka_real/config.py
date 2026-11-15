@@ -113,6 +113,16 @@ class FrankaStationConfig:
     between its kept neighbours is dropped before sending. 0 disables
     decimation and sends every planned waypoint."""
 
+    contact_descent_speed_m_s: float = 0.02
+    """Command rate for ``descend_until_contact``: slow enough that the
+    impedance controller's force rise on contact stays far below the
+    collision reflex thresholds."""
+
+    contact_force_n: float = 4.0
+    """External-force rise that also declares contact during a descent. 4 N is
+    load-bearing on the reference bench: 2.5 N false-tripped on the gravity
+    model's drift, 6 N rode its own threshold in free air."""
+
     gripper_max_width_m: float = 0.08
     gripper_force_n: float = 25.0
     joint_limits_lower: tuple[float, ...] = (

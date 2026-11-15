@@ -14,11 +14,13 @@ TABLE_Z = 0.017
 GRASP_OFFSET = 0.017  # fingers engage this far below a block's measured top
 BLOCK_LONG_M = 0.055
 BLOCK_FLAT_M = 0.028
-# Both live placements (flat blue, standing red) met the table before the
-# nominal 3 mm gap closed and fired the cartesian reflex; the standing red
-# then toppled and was knocked 16 cm toward the base during recovery. A
-# thicker gap costs a short drop and buys a clean release.
-RELEASE_GAP_M = 0.008
+# Placing is by contact, not by height: both live open-loop placements (flat
+# blue, standing red) met the table before a 3 mm gap closed and fired the
+# cartesian reflex, and the standing red toppled in the recovery. The descent
+# starts above the expected contact and stops when the hand stops sinking;
+# the floor is the stop for a miss, well below.
+PRE_PLACE_ABOVE_M = 0.03
+FLOOR_BELOW_M = 0.015
 CARRY_Z = 0.22
 SAFE_Z = 0.14
 SURVEY_Z = 0.33
@@ -78,11 +80,11 @@ def find(colour, near):
             "geometry": found.geometry}
 
 
-def place_ee_z(block):
-    # Standing blocks hang 55 mm below the grip, not 28: lowering one to the
-    # flat-block height fired the cartesian reflex live.
+def contact_ee_z(block):
+    # Where the hand should meet the table with this block: standing blocks
+    # hang 55 mm below the grip, not 28.
     vertical = BLOCK_FLAT_M if block["footprint"] >= 0.045 else BLOCK_LONG_M
-    return TABLE_Z + (vertical - GRASP_OFFSET) + RELEASE_GAP_M
+    return TABLE_Z + (vertical - GRASP_OFFSET)
 
 
 row = []
@@ -126,13 +128,16 @@ for step in PLAN:
         if not ok:
             aborted = True
             break
-        # Lower is contact-tolerant: a cartesian reflex here means the block
-        # met the table a few millimetres early (depth bias), which is a
-        # completed place, not a failure -- the first live clutter pick proved
-        # the release lands the block on target. Record it, release anyway.
-        must(move_to_pose({"position": [slot[0], slot[1], place_ee_z(block)],
-                           "frame": "base", "quaternion_wxyz": quat},
-                          max_steps=LONG_MOVE_STEPS), "lower")
+        expect_z = contact_ee_z(block)
+        ok = must(move_to_pose({"position": [slot[0], slot[1], expect_z + PRE_PLACE_ABOVE_M],
+                                "frame": "base", "quaternion_wxyz": quat},
+                               max_steps=LONG_MOVE_STEPS), "pre_place")
+        if not ok:
+            aborted = True
+            break
+        touch = franka_real.descend_to_contact(floor_z=max(expect_z - FLOOR_BELOW_M, 0.004))
+        must(touch, "lower")
+        contact = bool(touch.ok and touch.diagnostics["contact"])
         set_gripper(min(1.0, held + 0.2))
         ok = must(move_to_pose({"position": [slot[0], slot[1], CARRY_Z],
                                 "frame": "base", "quaternion_wxyz": quat},
@@ -150,6 +155,8 @@ for step in PLAN:
                   [round(check["x"], 4), round(check["y"], 4)],
                   "orientation": "flat" if block["footprint"] >= 0.045
                   else "standing",
+                  "contact": contact,
+                  "contact_z": None if not touch.ok else touch.diagnostics["contact_z"],
                   "attempts": attempt}
         row.append(placed)
     if placed is None and not aborted and (not row or row[-1]["colour"] != step["colour"]):
