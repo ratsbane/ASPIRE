@@ -14,6 +14,9 @@ import math
 TABLE_Z = 0.017
 BARE_HAND_TABLE_Z = 0.0128   # closed pads at the table plane, measured
 HIT_ABOVE_TABLE_M = 0.012    # a stop this far above the table is on a block
+HIT_FORCE_N = 2.5            # ...and pushed back: a stall alone near the base is a phantom
+PROBE_FORCE_N = 3.0          # press no harder than this; a pad on an edge shoves a block
+PROBE_X_MIN = 0.40           # closer to the base the descent stalls on itself (run 0019)
 BODY_BELOW_PADS_M = 0.050    # the hand body's underside sits this far above the pads
 SURVEY_Z = 0.33
 LONG_MOVE_STEPS = 600
@@ -23,11 +26,15 @@ FINE_PITCH_M = 0.01
 FINE_HALF = 1                # 3 x 3 cells, +-1 cm around the coarse centroid
 PROBE_ABOVE_M = 0.03
 
-# Two blocks far apart: blue lying flat on the row, the lime block standing
-# near (0.36, -0.20). Their bearing fixes the yaw of the correction.
+# Two flat blocks on the row: blue near (0.49, 0.0) and the green near
+# (0.41, 0.0) -- "green block" also matches the standing lime at (0.36, -0.20),
+# so the instance nearest the expected spot is taken. Run 0019 tried the lime:
+# the segmentation picked the wrong green, and probing at x ~0.35 reported
+# contacts 6-10 cm up where nothing stands (a near-base stall), so a second
+# target has to sit where the arm probes honestly.
 TARGETS = [
-    {"name": "blue", "prompt": "blue block", "standing": False},
-    {"name": "lime", "prompt": "green block", "standing": True},
+    {"name": "blue", "prompt": "blue block", "near": [0.49, 0.0]},
+    {"name": "green", "prompt": "green block", "near": [0.41, 0.0]},
 ]
 
 FAILED_MOVE = {"stage": None, "error": None}
@@ -51,43 +58,39 @@ def down(x, y, z):
 
 
 def see(target):
-    """The wrist camera's estimate of the target from the survey pose."""
-    if target["standing"]:
-        found = segment_text("wrist", target["prompt"])
-        if not found.ok:
-            return None
-        best = None
-        for seg in found.segmentations[:8]:
-            geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
-            extents = [float(v) for v in geometry.extents]
-            if max(extents) > 0.12:
-                continue
-            if best is None or extents[2] > best[1]:
-                best = (geometry, extents[2])
-        if best is None:
-            return None
-        geometry = best[0]
-    else:
-        found = localize_object(target["prompt"])
-        if not found.ok:
-            return None
-        geometry = found.geometry
+    """The wrist camera's estimate of the target: the instance nearest its spot."""
+    found = segment_text("wrist", target["prompt"])
+    if not found.ok:
+        return None
+    best = None
+    for seg in found.segmentations[:8]:
+        geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
+        px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
+        extents = [float(v) for v in geometry.extents]
+        if max(extents) > 0.12:
+            continue
+        distance = math.hypot(px - target["near"][0], py - target["near"][1])
+        if best is None or distance < best[1]:
+            best = (geometry, distance)
+    if best is None or best[1] > 0.10:
+        return None
+    geometry = best[0]
     px, py, pz = (float(v) for v in geometry.pose.position)
     extents = [float(v) for v in geometry.extents]
     return {"x": px, "y": py, "top": pz + extents[2] / 2.0, "extents": extents}
 
 
 def probe(x, y, top_est, floor_z):
-    """One contact descent at (x, y); the pads' stopping height, or None."""
+    """One contact descent at (x, y): (stop height, pushed back) or None."""
     if not must(down(x, y, max(top_est, BARE_HAND_TABLE_Z) + PROBE_ABOVE_M), "pre_probe"):
         return None
-    touch = franka_real.descend_to_contact(floor_z=floor_z)
+    touch = franka_real.descend_to_contact(floor_z=floor_z, contact_force_n=PROBE_FORCE_N)
     if not must(touch, "probe"):
         return None
     report = touch.diagnostics
     if report["stop"] == "contact":
-        return float(report["contact_z"])
-    return floor_z
+        return float(report["contact_z"]), float(report["force_rise_n"]) >= HIT_FORCE_N
+    return floor_z, False
 
 
 def grid_hits(cx, cy, pitch, half, top_est, floor_z):
@@ -96,12 +99,13 @@ def grid_hits(cx, cy, pitch, half, top_est, floor_z):
     for i in range(-half, half + 1):
         for j in range(-half, half + 1):
             x, y = cx + i * pitch, cy + j * pitch
-            if not (0.27 < x < 0.64 and -0.31 < y < 0.31):
+            if not (PROBE_X_MIN < x < 0.64 and -0.31 < y < 0.31):
                 continue
-            z = probe(x, y, top_est, floor_z)
-            if z is None:
+            felt = probe(x, y, top_est, floor_z)
+            if felt is None:
                 return hits, probes, False
-            hit = z > BARE_HAND_TABLE_Z + HIT_ABOVE_TABLE_M and z > floor_z + 0.004
+            z, pushed = felt
+            hit = pushed and z > BARE_HAND_TABLE_Z + HIT_ABOVE_TABLE_M and z > floor_z + 0.004
             probes.append([round(x, 4), round(y, 4), round(z, 4), hit])
             if hit:
                 hits.append((x, y))
@@ -116,7 +120,7 @@ measurements = []
 for target in TARGETS:
     entry = {"name": target["name"]}
     measurements.append(entry)
-    near = [0.50, 0.0] if target["name"] == "blue" else [0.40, -0.17]
+    near = target["near"]
     if not must(survey(near[0], near[1]), "survey"):
         break
     seen = see(target)
@@ -124,13 +128,11 @@ for target in TARGETS:
     if seen is None:
         entry["status"] = "not_seen"
         continue
-    top_est = 0.055 + TABLE_Z if target["standing"] else 0.028 + TABLE_Z
-    # The floor for a miss: the table for a flat block; for a standing one
-    # the hand body would sweep the block's top if the pads went that low,
-    # so the floor stays a body's height below the block top.
+    top_est = 0.028 + TABLE_Z
+    # The floor for a miss is the table. (A standing block would need the
+    # floor a hand-body's height below its top, or the body sweeps it while
+    # the pads go down beside it; see BODY_BELOW_PADS_M.)
     floor_z = BARE_HAND_TABLE_Z - 0.008
-    if target["standing"]:
-        floor_z = max(floor_z, top_est - BODY_BELOW_PADS_M + 0.01)
     close_gripper()
     hits, probes, ok = grid_hits(seen["x"], seen["y"], COARSE_PITCH_M, COARSE_HALF, top_est, floor_z)
     entry["coarse_probes"] = probes
