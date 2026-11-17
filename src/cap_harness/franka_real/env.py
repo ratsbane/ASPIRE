@@ -450,6 +450,16 @@ class RealFrankaEnv:
             self._panda.stop_controller()
         self.motions_executed += 1
         end_z = contact_z if contact_z is not None else actual
+        # Where the hand ended in the plane: the command holds x, y at 400 N/m
+        # while the hand sinks, and the same joint friction that lets it trail
+        # the command in z can let it drift sideways. Six of six round-trip
+        # placements landed 11-14 mm short in x (2026-11-17); this says whether
+        # the descent is where that goes.
+        try:
+            end_xy = np.asarray(self._panda.get_position(), dtype=np.float64)[:2]
+            drift_xy = [round(float(end_xy[0] - x), 4), round(float(end_xy[1] - y), 4)]
+        except Exception:
+            drift_xy = None
         self.note_event(
             "descend_done",
             stop=stop,
@@ -465,6 +475,7 @@ class RealFrankaEnv:
             "stop": stop,
             "force_rise_n": round(peak_rise, 2),
             "lag_m": round(actual - tz, 4),
+            "drift_xy_m": drift_xy,
             "speed_m_s": speed,
             "elapsed_s": round(time.monotonic() - started, 3),
             "controller": "panda_py_cartesian_impedance",

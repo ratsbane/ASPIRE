@@ -58,6 +58,8 @@ DEFAULT_FPS = 20
 #: Depth is kept every Nth sample: 5 Hz at 20 fps, since a 16-bit PNG per
 #: frame is the bulk of an episode and the colour stream carries the motion.
 DEPTH_EVERY_FRAMES = 4
+#: Frames the writer thread may fall behind the sampler before frames drop.
+WRITE_QUEUE_FRAMES = 120
 #: panda_py log capacity in samples at 1 kHz; 1.2M is twenty minutes, far
 #: beyond any one program run, so nothing is dropped mid-episode.
 ARM_LOG_SAMPLES = 1_200_000
@@ -103,6 +105,13 @@ class FrankaEpisodeRecorder:
         self._writers: dict[str, Any] = {}
         self._frames: dict[str, int] = {}
         self._depth_saved: dict[str, int] = {}
+        #: Encoding runs on its own thread: an mp4 append and a 16-bit PNG
+        #: write inside the sampling loop held the first live episode to 12 Hz
+        #: against a 20 Hz target. The queue is bounded, and a full queue drops
+        #: the frame (its stamp stays NaN) rather than stalling the sampler.
+        self._queue: Any = None
+        self._writer_thread: threading.Thread | None = None
+        self._dropped = 0
         self._metadata: dict[str, Any] = {}
         self._started_at: float | None = None
         self._clock_pairs: list[dict[str, float | None]] = []
@@ -151,6 +160,13 @@ class FrankaEpisodeRecorder:
         self._arm_logging = bool(env.start_arm_log(ARM_LOG_SAMPLES))
         self._clock_pairs.append(self._clock_pair("start"))
         self._running = True
+        import queue
+
+        self._queue = queue.Queue(maxsize=WRITE_QUEUE_FRAMES)
+        self._writer_thread = threading.Thread(
+            target=self._write_loop, name="franka-episode-writer", daemon=True
+        )
+        self._writer_thread.start()
         self._thread = threading.Thread(
             target=self._loop, name="franka-episode-recorder", daemon=True
         )
@@ -205,14 +221,38 @@ class FrankaEpisodeRecorder:
             frame = env.capture() if role == env.config.camera.role else env.capture_scene()
             stamp = float("nan") if frame is None else float(frame.timestamp_s)
             fresh = frame is not None and stamp != self._last_frame_t.get(role)
+            if frame is not None:
+                self._last_frame_t[role] = stamp
+                depth = None
+                if index % DEPTH_EVERY_FRAMES == 0 and getattr(frame, "depth_m", None) is not None:
+                    depth = np.asarray(frame.depth_m, dtype=np.float64)
+                try:
+                    self._queue.put_nowait((role, index, np.asarray(frame.rgb, dtype=np.uint8), depth))
+                except Exception:
+                    self._dropped += 1
+                    stamp = float("nan")  # not in the video: the stamp says so
             self._frame_t[role].append(stamp)
             self._fresh[role].append(bool(fresh))
-            if frame is None:
+
+    def _write_loop(self) -> None:
+        import queue
+
+        while True:
+            try:
+                item = self._queue.get(timeout=0.2)
+            except queue.Empty:
+                if not self._running:
+                    return
                 continue
-            self._last_frame_t[role] = stamp
-            self._write_frame(role, np.asarray(frame.rgb, dtype=np.uint8))
-            if index % DEPTH_EVERY_FRAMES == 0 and getattr(frame, "depth_m", None) is not None:
-                self._write_depth(role, index, np.asarray(frame.depth_m, dtype=np.float64))
+            if item is None:
+                return
+            role, index, rgb, depth = item
+            try:
+                self._write_frame(role, rgb)
+                if depth is not None:
+                    self._write_depth(role, index, depth)
+            except Exception:
+                self._sample_errors += 1
 
     def _write_frame(self, role: str, frame: np.ndarray) -> None:
         if role not in self._writers:
@@ -245,6 +285,14 @@ class FrankaEpisodeRecorder:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+        if self._writer_thread is not None:
+            # Drain what was sampled: the queue is bounded, so this is short.
+            try:
+                self._queue.put(None, timeout=1.0)
+            except Exception:
+                pass
+            self._writer_thread.join(timeout=10.0)
+            self._writer_thread = None
         for writer in self._writers.values():
             try:
                 writer.close()
@@ -305,6 +353,7 @@ class FrankaEpisodeRecorder:
                 "terminal_event": terminal_event,
                 "success": bool(success),
                 "sample_errors": self._sample_errors,
+                "dropped_frames": self._dropped,
             }
         )
         (self.out_dir / "metadata.json").write_text(
