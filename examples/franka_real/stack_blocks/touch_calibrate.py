@@ -107,6 +107,9 @@ def grid_hits(cx, cy, pitch, half, top_est, floor_z):
         for j in range(-half, half + 1):
             x, y = cx + i * pitch, cy + j * pitch
             if not (PROBE_X_MIN < x < 0.64 and -0.31 < y < 0.31):
+                # Outside the probe box counts as unreachable: a grid cut
+                # by the box leans the centroid like one cut by reach.
+                probes.append([round(x, 4), round(y, 4), None, False])
                 continue
             felt = probe(x, y, top_est, floor_z)
             if felt is None:

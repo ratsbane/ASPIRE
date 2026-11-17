@@ -26,9 +26,9 @@ FINGER_PAD_HALF_M = 0.008
 NEIGHBOUR_CLEAR_M = 0.010
 
 COLOUR = "blue"
-A_NOMINAL = [0.50, 0.00]   # where blue usually rests; the first look may find it elsewhere
-FIRST_NEAR_M = 0.15        # (a calibration's probing shoved it 9 cm, run 0029)
-B = [0.50, -0.15]
+FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12]]  # blue rests near the first; probing shoves it toward the second
+FIRST_NEAR_M = 0.15
+B_CHOICES = [[0.50, -0.15], [0.50, 0.00]]  # the far one from A is B, so a leg is a real carry
 ROUND_TRIPS = 3
 
 FAILED_MOVE = {"stage": None, "error": None}
@@ -204,19 +204,28 @@ def place(block, grasp, slot):
 
 
 legs = []
-origin = A_NOMINAL
+origin = FIRST_LOOKS[0]
 A = None  # fixed by the first look: the block is carried back to where it was found
 for trip in range(ROUND_TRIPS):
     for outbound in (True, False):
         leg = {"trip": trip, "from": origin, "status": "started"}
         legs.append(leg)
-        block = find(origin, FIRST_NEAR_M if A is None else NEAR_M)
+        if A is None:
+            block = None
+            for look in FIRST_LOOKS:
+                block = find(look, FIRST_NEAR_M)
+                if block is not None:
+                    break
+        else:
+            block = find(origin, NEAR_M)
         if block is None:
             leg["status"] = "not_found"
             break
         if A is None:
             A = [round(block["x"], 4), round(block["y"], 4)]
+            B = max(B_CHOICES, key=lambda spot: math.hypot(spot[0] - A[0], spot[1] - A[1]))
             leg["a"] = A
+            leg["b"] = B
         target = B if outbound else A
         leg["to"] = target
         leg["picked_from"] = [round(block["x"], 4), round(block["y"], 4)]
