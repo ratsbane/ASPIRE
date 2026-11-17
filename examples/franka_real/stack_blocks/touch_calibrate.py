@@ -37,6 +37,15 @@ TARGETS = [
     {"name": "blue", "prompt": "blue block", "near": [0.49, 0.0]},
     {"name": "green", "prompt": "green block", "near": [0.41, 0.0]},
 ]
+# Those two spots are where the blocks start a session; after a day of
+# campaigns they are wherever the last run left them (run 0233: blue in the
+# basket, green at the front edge, red on end), so the targets are now
+# whichever lying blocks the looks find, named by colour.
+COLOURS = ["blue", "green", "red"]
+LOOKS = [[0.49, 0.0], [0.45, -0.15], [0.50, 0.10]]
+WORK_X = (0.32, 0.60)   # where the probe grid can reach and the block is not at an edge
+WORK_Y = (-0.28, 0.12)  # the basket stands beyond y 0.12
+STANDING_TOP_M = 0.06   # a block on end: the probe floor would have to sit a hand-body below its top
 
 FAILED_MOVE = {"stage": None, "error": None}
 
@@ -132,10 +141,52 @@ def centroid(points):
     return [sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points)]
 
 
+def lying_blocks_in_view():
+    """Every lying block of any colour the camera sees from here, best first."""
+    out = []
+    for colour in COLOURS:
+        found = segment_text("wrist", colour + " block")
+        if not found.ok:
+            continue
+        for seg in found.segmentations[:8]:
+            if float(seg.score) < 0.5:
+                continue
+            geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
+            px, py, pz = (float(v) for v in geometry.pose.position)
+            extents = [float(v) for v in geometry.extents]
+            top = pz + extents[2] / 2.0
+            if max(extents) > 0.12 or top > STANDING_TOP_M:
+                continue
+            if not (WORK_X[0] < px < WORK_X[1] and WORK_Y[0] < py < WORK_Y[1]):
+                continue
+            out.append((float(seg.score), colour,
+                        {"x": px, "y": py, "top": top, "extents": extents}))
+    out.sort(key=lambda item: -item[0])
+    return out
+
+
 go_home()  # start from home: a run can begin wherever the last one left the arm (run 0121)
 measurements = []
-for target in TARGETS:
-    entry = {"name": target["name"]}
+targets = []
+for look in LOOKS:
+    if len(targets) >= 2:
+        break
+    if not survey(look[0], look[1]).ok:
+        continue
+    for score, colour, seen in lying_blocks_in_view():
+        if any(math.hypot(seen["x"] - t["seen"]["x"], seen["y"] - t["seen"]["y"]) < 0.06
+               for t in targets):
+            continue  # the same block from another look
+        if any(t["name"] == colour for t in targets):
+            continue  # one of each colour: the probe's centroid is per prompt
+        targets.append({"name": colour, "prompt": colour + " block", "near": [seen["x"], seen["y"]],
+                        "seen": seen, "look": look})
+        if len(targets) >= 2:
+            break
+if not targets:
+    measurements.append({"name": None, "status": "not_seen", "looks": LOOKS})
+for target in targets:
+    entry = {"name": target["name"], "look": target["look"]}
     measurements.append(entry)
     near = target["near"]
     if not survey(near[0], near[1]).ok:
@@ -143,7 +194,7 @@ for target in TARGETS:
         # calibration: one block measured is enough (run 0052).
         entry["status"] = "not_surveyed"
         continue
-    seen = see(target)
+    seen = see(target)  # from straight above it, as the picks look
     entry["seen"] = seen
     if seen is None:
         entry["status"] = "not_seen"
