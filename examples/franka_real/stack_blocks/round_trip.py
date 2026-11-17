@@ -25,7 +25,8 @@ VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block
 HELD_MIN = 0.08        # gripper fraction below which the close met air
 FINGER_HALF_OPEN_M = 0.040   # the fingers descend open: 80 mm between pads
 FINGER_PAD_HALF_M = 0.008
-NEIGHBOUR_CLEAR_M = 0.010
+NEIGHBOUR_CLEAR_M = 0.004  # a neighbour 9 cm off-nadir reads ~2.5 cm toward the camera; the
+                            # contact approach catches a pad on it and retries shifted (run 0101)
 
 COLOUR = "blue"
 FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12]]  # blue rests near the first; probing shoves it toward the second
