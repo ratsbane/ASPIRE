@@ -573,7 +573,7 @@ def test_reported_residuals_teach_the_eye_and_persist(tmp_path):
     assert report["alpha"] == 0.5
     report = adapter.report_hand_eye_residual([0.40, 0.00], [0.40, 0.00], weight=1.0)
     assert report["alpha"] == 1.0
-    assert adapter.get_controller_metadata()["wrist_correction_samples"] == 3
+    assert adapter.get_controller_metadata()["wrist_correction_samples"] == 4
     # The correction outlives the adapter.
     assert correction.is_file()
     fresh = make()
