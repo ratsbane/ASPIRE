@@ -66,6 +66,8 @@ def see(target):
         return None
     best = None
     for seg in found.segmentations[:8]:
+        if float(seg.score) < 0.5:
+            continue  # a weak mask may hold no valid depth, and back-projecting it raises (run 0040)
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
         px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
         extents = [float(v) for v in geometry.extents]

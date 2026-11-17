@@ -81,6 +81,8 @@ def neighbours(block):
         return []
     out = []
     for seg in found.segmentations[:12]:
+        if float(seg.score) < 0.3:
+            continue  # a weak mask may hold no valid depth; back-projecting it raises
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
         px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
         extents = [float(v) for v in geometry.extents]
