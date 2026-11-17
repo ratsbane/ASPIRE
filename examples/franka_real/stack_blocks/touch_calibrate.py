@@ -16,7 +16,8 @@ BARE_HAND_TABLE_Z = 0.0128   # closed pads at the table plane, measured
 HIT_ABOVE_TABLE_M = 0.012    # a stop this far above the table is on a block
 HIT_FORCE_N = 2.5            # ...and pushed back: a stall alone near the base is a phantom
 PROBE_FORCE_N = 3.0          # press no harder than this; a pad on an edge shoves a block
-PROBE_X_MIN = 0.40           # closer to the base the descent stalls on itself (run 0019)
+PROBE_X_MIN = 0.37           # at ~0.35 the descent stalled on itself (run 0019); a hit now needs force too
+SEEN_RADIUS_M = 0.25         # probing shoves the block a few cm each calibration; look wide
 BODY_BELOW_PADS_M = 0.050    # the hand body's underside sits this far above the pads
 SURVEY_Z = 0.33
 LONG_MOVE_STEPS = 600
@@ -73,7 +74,7 @@ def see(target):
         extents = [float(v) for v in geometry.extents]
         if max(extents) > 0.12:
             continue
-        if math.hypot(px - target["near"][0], py - target["near"][1]) > 0.15:
+        if math.hypot(px - target["near"][0], py - target["near"][1]) > SEEN_RADIUS_M:
             continue
         score = float(seg.score)
         if best is None or score > best[1]:
@@ -196,7 +197,9 @@ if measured:
         true_bearing = math.atan2(b["touched"][1] - a["touched"][1], b["touched"][0] - a["touched"][0])
         fit["yaw_error_deg"] = round(math.degrees(seen_bearing - true_bearing), 2)
 result = {
-    "ok": FAILED_MOVE["stage"] is None and len(measured) == len(TARGETS),
+    # One block by feel fixes the translation, which is what the eye needs;
+    # the second only adds the yaw estimate.
+    "ok": FAILED_MOVE["stage"] is None and len(measured) >= 1,
     "survey_z": SURVEY_Z,
     "measurements": measurements,
     "fit": fit,

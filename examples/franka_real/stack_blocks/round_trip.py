@@ -28,7 +28,9 @@ NEIGHBOUR_CLEAR_M = 0.010
 COLOUR = "blue"
 FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12]]  # blue rests near the first; probing shoves it toward the second
 FIRST_NEAR_M = 0.15
-B_CHOICES = [[0.50, -0.15], [0.50, 0.00]]  # the far one from A is B, so a leg is a real carry
+A = [0.50, 0.00]
+B = [0.50, -0.15]
+REHOME_M = 0.08   # found farther than this from A: the first carry takes it home
 ROUND_TRIPS = 3
 
 FAILED_MOVE = {"stage": None, "error": None}
@@ -207,12 +209,12 @@ def place(block, grasp, slot):
 
 legs = []
 origin = FIRST_LOOKS[0]
-A = None  # fixed by the first look: the block is carried back to where it was found
+rehome = False
 for trip in range(ROUND_TRIPS):
     for outbound in (True, False):
         leg = {"trip": trip, "from": origin, "status": "started"}
         legs.append(leg)
-        if A is None:
+        if len(legs) == 1:
             block = None
             for look in FIRST_LOOKS:
                 block = find(look, FIRST_NEAR_M)
@@ -223,12 +225,12 @@ for trip in range(ROUND_TRIPS):
         if block is None:
             leg["status"] = "not_found"
             break
-        if A is None:
-            A = [round(block["x"], 4), round(block["y"], 4)]
-            B = max(B_CHOICES, key=lambda spot: math.hypot(spot[0] - A[0], spot[1] - A[1]))
-            leg["a"] = A
-            leg["b"] = B
-        target = B if outbound else A
+        if len(legs) == 1:
+            # A block found far from A (probing shoves it) goes home first;
+            # the legs then alternate from there.
+            rehome = math.hypot(block["x"] - A[0], block["y"] - A[1]) > REHOME_M
+            leg["rehome"] = rehome
+        target = (A if rehome else B) if outbound else (B if rehome else A)
         leg["to"] = target
         leg["picked_from"] = [round(block["x"], 4), round(block["y"], 4)]
         leg["footprint"] = round(block["footprint"], 4)
