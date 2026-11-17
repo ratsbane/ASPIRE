@@ -93,8 +93,42 @@ class FakePanda:
         #: a hand that tracks, less is the live arm's friction-bound trailing.
         self.follow = 1.0
         self.start_z = None
+        #: panda_py's state log: fed per read here, as the real one is when idle.
+        self.log_enabled = False
+        self.log_rows: list = []
+
+    def enable_logging(self, buffer_size):
+        self.log_enabled = True
+        self.log_rows = []
+
+    def disable_logging(self):
+        self.log_enabled = False
+
+    def get_log(self):
+        keys = ("q", "dq", "tau_J", "tau_ext_hat_filtered", "O_T_EE", "O_F_ext_hat_K", "time")
+        return {key: [row[key] for row in self.log_rows] for key in keys}
+
+    def _log_sample(self, state):
+        if not self.log_enabled:
+            return
+        self.log_rows.append(
+            {
+                "q": np.asarray(state.q, dtype=np.float64),
+                "dq": np.zeros(7),
+                "tau_J": np.zeros(7),
+                "tau_ext_hat_filtered": np.zeros(7),
+                "O_T_EE": fake_fk(self.q).T.reshape(16),
+                "O_F_ext_hat_K": np.asarray(state.O_F_ext_hat_K, dtype=np.float64),
+                "time": np.asarray([float(len(self.log_rows))]),
+            }
+        )
 
     def get_state(self):
+        state = self._get_state()
+        self._log_sample(state)
+        return state
+
+    def _get_state(self):
         fz = 0.0
         if (
             self.commanded is not None
@@ -438,6 +472,49 @@ def test_contact_descent_stops_pressing_when_the_hand_will_not_follow():
     assert report["travel_m"] < 0.05
     assert float(env._panda.commanded[2]) < 0.25  # the command went below the floor
     assert report["lag_m"] > 0.03
+
+
+def test_episode_recorder_writes_arm_log_cameras_and_events(tmp_path):
+    import json
+    import time
+
+    class Observer:
+        root = tmp_path
+        capture_videos = True
+
+    panda = FakePanda()
+    env = RealFrankaEnv(
+        FrankaStationConfig(),
+        panda=panda,
+        gripper=FakeGripper(),
+        camera=SyntheticCamera(),
+        fk=fake_fk,
+        impedance_controller=lambda: FakeImpedanceController(panda),
+    )
+    adapter = FrankaRealAdapter(env, allow_physical_motion=True, run_observer=Observer())
+    adapter.reset("stack_blocks", 0)  # starts the recorder
+    adapter.set_gripper(0.5)
+    panda.surface_z = 0.26
+    assert adapter.descend_to_contact(floor_z=0.25).ok
+    time.sleep(0.3)  # a few camera samples at 20 Hz
+    adapter.finish_episode_recording()
+    adapter.finish_episode_recording()  # idempotent
+
+    raw = tmp_path / "episode" / "raw"
+    meta = json.loads((raw / "metadata.json").read_text())
+    assert meta["arm_samples"] > 0
+    assert meta["camera_samples"] >= 2
+    assert meta["sample_errors"] == 0
+    assert np.load(raw / "arm-q.npy").shape == (meta["arm_samples"], 7)
+    assert np.load(raw / "arm-O_T_EE.npy").shape == (meta["arm_samples"], 16)
+    assert np.load(raw / "arm-time_ms.npy").shape == (meta["arm_samples"],)
+    assert np.load(raw / "gripper-width_m.npy").shape == (meta["camera_samples"],)
+    kinds = [event["kind"] for event in json.loads((raw / "events.json").read_text())]
+    assert "gripper" in kinds and "descend" in kinds and "descend_done" in kinds
+    role = env.config.camera.role
+    assert (tmp_path / "media" / "videos" / f"{role}-images-rgb.mp4").exists()
+    assert np.load(raw / f"camera-{role}-fresh.npy").dtype == bool
+    assert meta["clock_pairs"][0]["label"] == "start"
 
 
 def test_contact_descent_is_guarded_like_a_waypoint():

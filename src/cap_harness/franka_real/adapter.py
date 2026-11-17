@@ -20,6 +20,7 @@ protocol's conservative ``False``.
 
 from __future__ import annotations
 
+from pathlib import Path
 import time
 from typing import Any, Mapping, Optional
 
@@ -155,7 +156,56 @@ class FrankaRealAdapter:
             )
         elif self._task_context is None:
             raise ValueError("reset needs a franka_real task name or metadata")
+        self._start_episode_recording()
         return self.get_observation()
+
+    # -- episode recording -------------------------------------------------
+
+    def _start_episode_recording(self) -> None:
+        """Record the plant at its own rates into the run's episode directory.
+
+        The trace is per call and a policy needs the trajectory between calls
+        (see :mod:`cap_harness.franka_real.recorder`). Needs a run to write
+        into, so an ad-hoc adapter without a run observer records nothing.
+        """
+        root = getattr(self._run_observer, "root", None)
+        if root is None:
+            return
+        self.finish_episode_recording()
+        from .recorder import FrankaEpisodeRecorder
+
+        task = "" if self._task_context is None else str(self._task_context.task_name or "")
+        recorder = FrankaEpisodeRecorder(
+            Path(root) / "episode" / "raw",
+            video_dir=Path(root) / "media" / "videos",
+            cameras=None if getattr(self._run_observer, "capture_videos", True) else (),
+            task=task,
+        )
+        try:
+            recorder.start(
+                self._env,
+                meta={
+                    "physical_motion_authorized": self._allow_physical_motion,
+                    "seed": None
+                    if self._task_context is None
+                    else self._task_context.metadata.get("seed"),
+                },
+            )
+        except Exception:
+            return
+        self._episode_recorder = recorder
+
+    def finish_episode_recording(self) -> None:
+        """Stop the sampler and write the episode; the run teardown calls this
+        before the artifacts are sealed, so the files are listed in the manifest."""
+        recorder = getattr(self, "_episode_recorder", None)
+        self._episode_recorder = None
+        if recorder is None:
+            return
+        try:
+            recorder.finalize(success=bool(self.last_success_report.get("verdict", False)))
+        except Exception:
+            pass
 
     def get_task_context(self) -> TaskContext:
         if self._task_context is None:
@@ -537,6 +587,7 @@ class FrankaRealAdapter:
         }
 
     def close(self) -> None:
+        self.finish_episode_recording()
         self._env.close()
 
 

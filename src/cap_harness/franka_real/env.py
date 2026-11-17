@@ -20,6 +20,7 @@ asks for a pose outside it gets a refusal, not a clipped motion.
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Callable, Optional
 
@@ -88,6 +89,10 @@ class RealFrankaEnv:
         self._gripper_holding = False
         self.motions_executed = 0
         """Count of waypoint batches actually sent to the arm, for provenance."""
+        self._gripper_lock = threading.Lock()
+        """Serializes libfranka gripper traffic between commands and a sampler."""
+        self.events: list[dict[str, Any]] = []
+        """What the plant was told, host-timestamped, for the episode recorder."""
 
     # -- observation -------------------------------------------------------
 
@@ -106,13 +111,71 @@ class RealFrankaEnv:
         state = self._panda.get_state()
         q = np.asarray(state.q, dtype=np.float64).reshape(ARM_DOF)
         dq = np.asarray(state.dq, dtype=np.float64).reshape(ARM_DOF)
-        width = float(self._gripper.read_once().width)
+        width = self.read_gripper_width()
         return {
             "joint_pos": q,
             "joint_vel": dq,
-            "gripper_width_m": width,
+            "gripper_width_m": float(width if width is not None else float("nan")),
             "ee_transform": self.fk_matrix(q),
         }
+
+    def read_gripper_width(self, *, wait: bool = True) -> Optional[float]:
+        """Measured finger opening, or None when a command holds the gripper and ``wait`` is off."""
+        if not self._gripper_lock.acquire(blocking=wait):
+            return None
+        try:
+            return float(self._gripper.read_once().width)
+        finally:
+            self._gripper_lock.release()
+
+    # -- episode bookkeeping ----------------------------------------------
+
+    def note_event(self, kind: str, **fields: Any) -> None:
+        """Append one host-timestamped command event for the episode recorder."""
+        self.events.append({"t_s": time.monotonic(), "kind": kind, **fields})
+
+    def robot_time_ms(self) -> Optional[float]:
+        """The robot clock, in milliseconds, read on the calling thread; None if unexposed."""
+        stamp = getattr(self._panda.get_state(), "time", None)
+        if stamp is None:
+            return None
+        for name in ("to_msec", "toMSec"):
+            method = getattr(stamp, name, None)
+            if callable(method):
+                return float(method())
+        method = getattr(stamp, "to_sec", None)
+        if callable(method):
+            return float(method()) * 1000.0
+        try:
+            return float(stamp)
+        except (TypeError, ValueError):
+            return None
+
+    def start_arm_log(self, samples: int) -> bool:
+        """Turn on panda_py's state log (fed by its control loop); False if the plant has none."""
+        enable = getattr(self._panda, "enable_logging", None)
+        if not callable(enable):
+            return False
+        enable(int(samples))
+        return True
+
+    def take_arm_log(self) -> dict[str, np.ndarray]:
+        """Stop the log and return it as one array per channel, rows in time order."""
+        get_log = getattr(self._panda, "get_log", None)
+        if not callable(get_log):
+            return {}
+        raw = get_log()
+        disable = getattr(self._panda, "disable_logging", None)
+        if callable(disable):
+            disable()
+        log: dict[str, np.ndarray] = {}
+        for key, rows in dict(raw).items():
+            if len(rows) == 0:
+                continue
+            log[str(key)] = np.asarray(
+                [np.asarray(row, dtype=np.float64).reshape(-1) for row in rows]
+            )
+        return log
 
     def capture(self) -> Optional[CameraFrame]:
         """The wrist camera's most recent frame, or None without a camera."""
@@ -218,10 +281,17 @@ class RealFrankaEnv:
         sent = self._decimate_waypoints(points)
         factor = float(speed_factor if speed_factor is not None else self.config.speed_factor)
         started = time.monotonic()
+        self.note_event(
+            "waypoints",
+            target_q=[round(float(v), 5) for v in sent[-1]],
+            waypoints_sent=int(sent.shape[0]),
+            speed_factor=factor,
+        )
         converged = bool(
             self._panda.move_to_joint_position([row for row in sent], speed_factor=factor)
         )
         self.motions_executed += 1
+        self.note_event("waypoints_done", converged=converged)
         if not converged:
             raise RuntimeError(
                 "the motion generator reported non-convergence at the final waypoint"
@@ -321,6 +391,7 @@ class RealFrankaEnv:
         series: list[list[float]] = []
         tick = 0
         fz = fz0
+        self.note_event("descend", floor_z=round(floor_z, 4), speed_m_s=speed, start_z=round(start_z, 4))
         self._panda.start_controller(controller)
         try:
             with self._panda.create_context(
@@ -379,6 +450,12 @@ class RealFrankaEnv:
             self._panda.stop_controller()
         self.motions_executed += 1
         end_z = contact_z if contact_z is not None else actual
+        self.note_event(
+            "descend_done",
+            stop=stop,
+            contact_z=None if contact_z is None else round(contact_z, 4),
+            end_z=round(end_z, 4),
+        )
         return {
             "contact": contact_z is not None,
             "contact_z": None if contact_z is None else round(contact_z, 4),
@@ -404,6 +481,16 @@ class RealFrankaEnv:
     # -- gripper -----------------------------------------------------------
 
     def set_gripper_width(self, width_m: float) -> dict[str, Any]:
+        """Command the fingers under the gripper lock and note what happened."""
+        with self._gripper_lock:
+            report = self._set_gripper_width_locked(width_m)
+        self.note_event(
+            "gripper",
+            **{key: report.get(key) for key in ("commanded_width_m", "measured_width_m", "ok", "noop")},
+        )
+        return report
+
+    def _set_gripper_width_locked(self, width_m: float) -> dict[str, Any]:
         """Width move when opening, force-closure when closing onto something.
 
         The Franka gripper's plain ``move`` reports failure when an object
