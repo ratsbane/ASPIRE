@@ -126,7 +126,10 @@ def neighbours(block):
         across = -dx * math.sin(oyaw) + dy * math.cos(oyaw)
         if abs(along) < long_half + 0.005 and abs(across) < short_half + 0.005:
             continue
-        out.append((px, py, oyaw, long_half, short_half))
+        # Standing blocks matter to the camera (55 mm tall against a camera
+        # underside ~50 mm above the pads, measured 2026-11-17); lying ones
+        # (28 mm) pass 29 mm under it.
+        out.append((px, py, oyaw, long_half, short_half, extents[2] > 0.04))
     return out
 
 
@@ -158,7 +161,9 @@ def camera_clearance(block, yaw, others):
     cx = block["x"] + CAMERA_OFFSET[0] * math.cos(yaw) - CAMERA_OFFSET[1] * math.sin(yaw)
     cy = block["y"] + CAMERA_OFFSET[0] * math.sin(yaw) + CAMERA_OFFSET[1] * math.cos(yaw)
     nearest = 1.0
-    for ox, oy, oyaw, long_half, short_half in others:
+    for ox, oy, oyaw, long_half, short_half, tall in others:
+        if not tall:
+            continue
         dx, dy = cx - ox, cy - oy
         along = abs(dx * math.cos(oyaw) + dy * math.sin(oyaw)) - long_half
         across = abs(-dx * math.sin(oyaw) + dy * math.cos(oyaw)) - short_half
@@ -216,7 +221,7 @@ def finger_clear(block, yaw, others):
     for sign in (1.0, -1.0):
         fx = block["x"] + sign * FINGER_HALF_OPEN_M * math.cos(axis)
         fy = block["y"] + sign * FINGER_HALF_OPEN_M * math.sin(axis)
-        for ox, oy, oyaw, long_half, short_half in others:
+        for ox, oy, oyaw, long_half, short_half, tall in others:
             dx, dy = fx - ox, fy - oy
             along = dx * math.cos(oyaw) + dy * math.sin(oyaw)
             across = -dx * math.sin(oyaw) + dy * math.cos(oyaw)
