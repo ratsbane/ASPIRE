@@ -89,6 +89,10 @@ class FakePanda:
         self.surface_z = None
         self.commanded = None
         self.controller = None
+        #: Fraction of the command's descent the hand actually follows; 1.0 is
+        #: a hand that tracks, less is the live arm's friction-bound trailing.
+        self.follow = 1.0
+        self.start_z = None
 
     def get_state(self):
         fz = 0.0
@@ -104,6 +108,10 @@ class FakePanda:
         here = fake_fk(self.q)[:3, 3].copy()
         if self.commanded is not None:
             here = self.commanded.copy()
+            if self.follow < 1.0:
+                if self.start_z is None:
+                    self.start_z = float(fake_fk(self.q)[2, 3])
+                here[2] = self.start_z - self.follow * (self.start_z - here[2])
             if self.surface_z is not None:
                 here[2] = max(here[2], self.surface_z)
         return here
@@ -412,6 +420,24 @@ def test_contact_descent_reaches_the_floor_in_free_air():
     assert report["contact"] is False
     assert report["stop"] == "floor"
     assert abs(report["travel_m"] - 0.05) < 0.003
+    assert report["series_columns"] == ["t_s", "command_z", "hand_z", "fz_n"]
+    assert len(report["series"]) > 10
+
+
+def test_contact_descent_stops_pressing_when_the_hand_will_not_follow():
+    # Live, the hand trailed a 20 mm/s command at about half speed and by 21 mm
+    # at a floor 42 mm down; the floor bounds the hand, and the command may lead
+    # it by at most the press budget before the descent gives up as a press.
+    env, adapter = build()
+    env._panda.follow = 0.3
+    result = adapter.descend_to_contact(floor_z=0.25)
+    assert result.ok, result.error
+    report = result.diagnostics
+    assert report["contact"] is False
+    assert report["stop"] == "press"
+    assert report["travel_m"] < 0.05
+    assert float(env._panda.commanded[2]) < 0.25  # the command went below the floor
+    assert report["lag_m"] > 0.03
 
 
 def test_contact_descent_is_guarded_like_a_waypoint():
@@ -827,6 +853,8 @@ def test_clutter_example_programs_pass_the_sandbox_validator():
         "stack_blocks/shove_stack.py",
         "stack_blocks/sort_colours.py",
         "stack_blocks/observe.py",
+        "stack_blocks/touch_table.py",
+        "stack_blocks/round_trip.py",
     ):
         source = (examples / relative).read_text()
         _ProgramValidator().visit(ast.parse(source))  # raises on a violation

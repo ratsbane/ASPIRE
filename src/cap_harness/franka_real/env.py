@@ -48,6 +48,18 @@ CONTACT_GUARD_TRAVEL_M = 0.018  # no verdict before the command has sunk this fa
 CONTACT_UNLOAD_TICKS = 30  # ease the command back up to the contact height
 CONTACT_MIN_DESCENT_M = 0.025  # the guard travel plus room to measure a rate
 CONTACT_MAX_SPEED_M_S = 0.05
+CONTACT_SERIES_EVERY_TICKS = 5
+"""Every fifth control tick is kept in the descent report (20 Hz)."""
+CONTACT_MAX_LAG_M = 0.035
+"""How far the command may lead the hand: the press budget on a miss.
+
+Measured live (2026-11-17, bare hand, 20 mm/s, 300 N/m in z): the hand follows
+the sinking command at roughly half its speed and trails it by 21 mm when a
+floor 42 mm down is reached -- joint friction, not contact. A floor that bounds
+the command therefore stops the hand short of anything; the floor bounds the
+hand instead, and the command may run this far below it, which at 300 N/m is
+about 10 N on a miss, under the arm's collision reflex thresholds.
+"""
 
 
 class RealFrankaEnv:
@@ -250,6 +262,11 @@ class RealFrankaEnv:
         release does not let the stored spring drive the hand on. The floor is
         the stop for a miss, not the target: a caller puts it well below the
         contact it expects, and the workspace box bounds it like any waypoint.
+        It bounds the *hand*: the command may lead the hand by up to
+        ``CONTACT_MAX_LAG_M`` (the hand trails a sinking command by ~20 mm on
+        this arm, friction, not contact), and a stop is ``"floor"`` when the
+        hand reaches the floor, ``"press"`` when the command runs out of lead
+        first, ``"contact"`` when the hand stops following.
         """
         speed = float(
             speed_m_s if speed_m_s is not None else self.config.contact_descent_speed_m_s
@@ -296,8 +313,14 @@ class RealFrankaEnv:
         peak_rise = 0.0
         contact_z: Optional[float] = None
         stop = "timeout"
-        runtime = (tz - floor_z) / speed + 2.0
+        command_floor = floor_z - CONTACT_MAX_LAG_M
+        runtime = (tz - command_floor) / speed + 2.0
         started = time.monotonic()
+        # A downsampled record of the command, the hand and the force, so a
+        # floor stop can be told apart from a trigger that failed to fire.
+        series: list[list[float]] = []
+        tick = 0
+        fz = fz0
         self._panda.start_controller(controller)
         try:
             with self._panda.create_context(
@@ -305,6 +328,11 @@ class RealFrankaEnv:
             ) as context:
                 while context.ok():
                     actual = float(self._panda.get_position()[2])
+                    if tick % CONTACT_SERIES_EVERY_TICKS == 0:
+                        series.append(
+                            [round(tick * CONTACT_DT_S, 2), round(tz, 4), round(actual, 4), round(fz, 2)]
+                        )
+                    tick += 1
                     if contact_z is not None:
                         tz = min(
                             contact_z,
@@ -315,7 +343,7 @@ class RealFrankaEnv:
                         if unload_ticks >= CONTACT_UNLOAD_TICKS:
                             break
                         continue
-                    tz = max(floor_z, tz - speed * CONTACT_DT_S)
+                    tz = max(command_floor, tz - speed * CONTACT_DT_S)
                     controller.set_control(np.array([x, y, tz]), orientation, q)
                     fz = float(self._panda.get_state().O_F_ext_hat_K[2])
                     if settle < CONTACT_BASELINE_END_TICKS:
@@ -341,8 +369,11 @@ class RealFrankaEnv:
                         contact_z = actual
                         stop = "contact"
                         continue
-                    if tz <= floor_z + 1e-4:
+                    if actual <= floor_z + 1e-4:
                         stop = "floor"
+                        break
+                    if tz <= command_floor + 1e-4:
+                        stop = "press"
                         break
         finally:
             self._panda.stop_controller()
@@ -356,9 +387,12 @@ class RealFrankaEnv:
             "travel_m": round(start_z - end_z, 4),
             "stop": stop,
             "force_rise_n": round(peak_rise, 2),
+            "lag_m": round(actual - tz, 4),
             "speed_m_s": speed,
             "elapsed_s": round(time.monotonic() - started, 3),
             "controller": "panda_py_cartesian_impedance",
+            "series_columns": ["t_s", "command_z", "hand_z", "fz_n"],
+            "series": series,
         }
 
     def move_home(self, *, speed_factor: Optional[float] = None) -> dict[str, Any]:
