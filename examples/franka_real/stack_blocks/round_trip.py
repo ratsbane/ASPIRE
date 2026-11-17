@@ -301,6 +301,24 @@ for trip in range(ROUND_TRIPS):
         leg["eye_residual_xy"] = lesson["residual_xy"]
         leg["eye_drift"] = bool(lesson["drift"])
         leg["eye_offset_xyz"] = lesson["offset_xyz"]
+        looks = 1
+        while lesson["drift"] and looks < 3:
+            # The eye just moved (a loose mount): it has been taught half the
+            # residual, so look again with the taught eye before calling the
+            # placement off-target (run 0065: a 29 mm jump on one look).
+            again = find(target)
+            if again is None:
+                break
+            looks += 1
+            after = again
+            error = math.hypot(after["x"] - target[0], after["y"] - target[1])
+            lesson = franka_real.report_hand_eye_residual(
+                [after["x"], after["y"]], placed["released_at"])
+            leg["found_at"] = [round(after["x"], 4), round(after["y"], 4)]
+            leg["error_m"] = round(error, 4)
+            leg["eye_residual_xy"] = lesson["residual_xy"]
+            leg["eye_offset_xyz"] = lesson["offset_xyz"]
+        leg["looks"] = looks
         leg["status"] = "verified" if error < VERIFY_M else "off_target"
         origin = [after["x"], after["y"]]
         if leg["status"] != "verified":
