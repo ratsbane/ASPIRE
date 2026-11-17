@@ -69,6 +69,8 @@ PLANE_MIN_HEIGHT_M = 0.15
 """Level against the table only when the camera is at least this high above it."""
 PLANE_TOLERANCES_M = (0.03, 0.015, 0.008)
 """Inlier bands for the successive plane refits."""
+PLANE_RANSAC_TRIALS = 120
+"""Three-point samples tried for the seed plane before the refits."""
 
 
 class FrankaRealAdapter:
@@ -814,7 +816,29 @@ def _fit_table_plane(
     # the old story), and this runs inside every look on the live arm.
     rotation = camera_matrix[:3, :3]
     points = np.einsum("ij,nj->ni", rotation, camera_points) + camera_matrix[:3, 3]
-    selected = points
+    # Seed by consensus, not least squares: from a survey height the floor
+    # beyond the table edge and the robot base are in view, and one
+    # least-squares plane over everything landed 39 degrees off with 8 %
+    # inliers (live, 2026-11-17). Three-point samples, the plane most points
+    # agree with wins, then the refits tighten it.
+    generator = np.random.default_rng(0)
+    best_inside = None
+    best_count = 0
+    for _ in range(PLANE_RANSAC_TRIALS):
+        trio = points[generator.choice(points.shape[0], 3, replace=False)]
+        candidate = np.cross(trio[1] - trio[0], trio[2] - trio[0])
+        length = float(np.linalg.norm(candidate))
+        if length < 1e-9:
+            continue
+        candidate = candidate / length
+        distance = np.abs(np.einsum("nj,j->n", points - trio[0], candidate))
+        inside = distance < PLANE_TOLERANCES_M[0]
+        count = int(inside.sum())
+        if count > best_count:
+            best_count, best_inside = count, inside
+    if best_inside is None or best_count < 50:
+        return None
+    selected = points[best_inside]
     normal = np.array([0.0, 0.0, 1.0])
     centroid = points.mean(axis=0)
     for tolerance in PLANE_TOLERANCES_M:
