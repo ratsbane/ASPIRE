@@ -36,7 +36,8 @@ FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12]]  # blue rests near the first; probin
 FIRST_NEAR_M = 0.15
 A = [0.53, 0.00]      # 12 cm from green's row spot: a pick beside a 2-3 cm eye error still clears
 B = [0.53, -0.15]
-C = [0.42, -0.12]     # the spare spot, when A or B has a block in it
+C = [0.60, -0.07]     # the spare spot, when A or B has a block in it: the front of the table
+                      # (the old (0.42, -0.12) had no IK for the retreat or the survey, run 0155)
 TARGET_CLEAR_M = 0.07  # another block this close to a spot makes it unusable
 REHOME_M = 0.08   # found farther than this from A: the first carry takes it home
 ROUND_TRIPS = 3
