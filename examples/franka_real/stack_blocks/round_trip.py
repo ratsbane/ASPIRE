@@ -21,6 +21,7 @@ LONG_MOVE_STEPS = 600
 NEAR_M = 0.07
 NADIR_M = 0.04   # farther than this from the survey spot, look again from above the block
 VERIFY_M = 0.03
+VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block as read
 HELD_MIN = 0.08        # gripper fraction below which the close met air
 FINGER_HALF_OPEN_M = 0.040   # the fingers descend open: 80 mm between pads
 FINGER_PAD_HALF_M = 0.008
@@ -293,7 +294,10 @@ for trip in range(ROUND_TRIPS):
             leg["status"] = "move_failed"
             break
         leg.update(placed)
-        after = find(target)
+        # The verify looks wide: there is one blue block, the hand just put it
+        # here, and an untaught eye (new bracket, run 0085) can read it 10 cm
+        # off -- which is exactly the residual the verify exists to report.
+        after = find(target, VERIFY_LOOK_M)
         if after is None:
             leg["status"] = "lost"
             break
