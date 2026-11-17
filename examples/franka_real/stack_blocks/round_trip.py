@@ -243,6 +243,24 @@ def choose_yaw(block, others):
         blocked_by = ["joints", margin]
     if blocked_by is None and camera_room < CAMERA_CLEAR_M:
         blocked_by = ["camera", round(camera_room, 3)]
+    if blocked_by is not None:
+        # The fingers' line is blocked across the width; a bleed-inflated
+        # footprint can also have the axes the wrong way round (run 0145:
+        # "blocked" by green 6 cm off along what was really the width). Try
+        # the fingers turned 90 degrees: across the length, 12 mm of margin
+        # a side, with the shifted retries to cover it.
+        for candidate in (fold(yaw + math.pi / 2.0), fold(yaw - math.pi / 2.0)):
+            alt_margin = min(joint_margin(block["x"], block["y"], SAFE_Z, candidate),
+                             joint_margin(A[0], A[1], 0.06, candidate),
+                             joint_margin(B[0], B[1], 0.06, candidate),
+                             joint_margin(C[0], C[1], 0.06, candidate))
+            if alt_margin < LIMIT_MARGIN_RAD:
+                continue
+            if finger_clear(block, candidate, others) is not None:
+                continue
+            if camera_clearance(block, candidate, others) < CAMERA_CLEAR_M:
+                continue
+            return candidate, None
     return yaw, blocked_by
 
 
