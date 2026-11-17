@@ -19,6 +19,7 @@ SAFE_Z = 0.14
 SURVEY_Z = 0.33
 LONG_MOVE_STEPS = 600
 NEAR_M = 0.07
+NADIR_M = 0.04   # farther than this from the survey spot, look again from above the block
 VERIFY_M = 0.03
 HELD_MIN = 0.08        # gripper fraction below which the close met air
 FINGER_HALF_OPEN_M = 0.040   # the fingers descend open: 80 mm between pads
@@ -69,6 +70,19 @@ def find(near, radius=NEAR_M):
         return None
     if math.hypot(px - near[0], py - near[1]) > radius:
         return None
+    if math.hypot(px - near[0], py - near[1]) > NADIR_M:
+        # A block well off the survey's nadir reads worse (silhouette bleed,
+        # and a loose camera's tilt costs more at the edge of the image):
+        # look again from straight above it before trusting the position
+        # (run 0061: an air close on a block read 9 cm off-nadir at the
+        # table's edge).
+        if not must(survey(px, py), "survey"):
+            return None
+        again = localize_object(COLOUR + " block")
+        if again.ok:
+            qx, qy, qz = (float(v) for v in again.geometry.pose.position)
+            if math.hypot(qx - px, qy - py) < 0.06:
+                found, px, py, pz = again, qx, qy, qz
     extents = [float(v) for v in found.geometry.extents]
     return {"x": px, "y": py, "top": pz + extents[2] / 2.0,
             "footprint": max(extents[0], extents[1]),
