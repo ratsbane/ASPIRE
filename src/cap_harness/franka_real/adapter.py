@@ -71,6 +71,8 @@ PLANE_TOLERANCES_M = (0.03, 0.015, 0.008)
 """Inlier bands for the successive plane refits."""
 PLANE_RANSAC_TRIALS = 120
 """Three-point samples tried for the seed plane before the refits."""
+PLANE_MAX_JUMP_DEG = 8.0
+"""A fitted tilt this far from the last accepted one is a wrong plane, not the mount moving."""
 
 
 class FrankaRealAdapter:
@@ -140,7 +142,20 @@ class FrankaRealAdapter:
                         "plane_below_camera_m": round(below, 3),
                     }
                 )
-                if (
+                previous_tilt = self.last_level_report.get("tilt_deg")
+                jump = (
+                    previous_tilt is not None
+                    and self.last_level_report.get("leveled")
+                    and abs(tilt - float(previous_tilt)) > PLANE_MAX_JUMP_DEG
+                )
+                if jump:
+                    # A mount does not change angle by this much between two
+                    # looks; a plane this different is not the table (a look
+                    # after a placement once read the block 24 cm from where
+                    # the hand had released it, run 0185). Keep the last.
+                    report["reason"] = "tilt jump"
+                    report["jump_deg"] = round(abs(tilt - float(previous_tilt)), 2)
+                elif (
                     inliers >= PLANE_MIN_INLIERS
                     and tilt <= PLANE_MAX_TILT_DEG
                     and below >= PLANE_MIN_HEIGHT_M

@@ -537,6 +537,11 @@ for trip in range(ROUND_TRIPS):
         # off -- which is exactly the residual the verify exists to report.
         after = find(target, VERIFY_LOOK_M)
         if after is None:
+            # One wild look (run 0185: the block read 24 cm from where the
+            # hand had just released it) is not a lost block: look once more.
+            after = find(target, VERIFY_LOOK_M)
+        leg["eye_level"] = franka_real.get_controller_metadata().get("wrist_level")
+        if after is None:
             leg["status"] = "lost"
             break
         error = math.hypot(after["x"] - target[0], after["y"] - target[1])
