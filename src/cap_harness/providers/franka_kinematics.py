@@ -22,6 +22,12 @@ POSITION_TOLERANCE_M = 0.005
 
 PANDA_LOWER = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
 PANDA_UPPER = np.array([2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973])
+PANDA_HOME = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
+"""The canonical elbow-up branch. The analytical solver returns the branch its
+seed is in, and an arm that has wound into another branch over a long run
+(live, run 0229: shoulder at -105 degrees, forearm turned back) can find no
+in-limit solution there for poses it reached minutes earlier. A pose the
+measured seed cannot reach is tried again from here before it is refused."""
 
 
 class FrankaIKProvider:
@@ -66,39 +72,17 @@ class FrankaIKProvider:
             )
         matrix = np.asarray(target_pose.as_matrix(), dtype=np.float64)
 
-        # q_7 parameterizes Franka's redundancy, and the right value depends on
-        # the requested orientation: a down-grasp turned 48 degrees needs the
-        # wrist turned with it, so pinning q_7 at the seed's value makes every
-        # rotated pose "unreachable" (found live, first stack attempt). Sweep
-        # the joint's range and keep the valid solution nearest the seed.
-        best: np.ndarray | None = None
-        best_cost = float("inf")
-        for q7 in np.arange(PANDA_LOWER[6] + 0.05, PANDA_UPPER[6] - 0.05 + 1e-9, 0.1):
-            try:
-                candidate = np.asarray(
-                    self._ik(matrix, q_init=seed, q_7=float(q7)), dtype=np.float64
-                ).reshape(ARM_DOF)
-            except TypeError:
-                try:
-                    candidate = np.asarray(self._ik(matrix), dtype=np.float64).reshape(ARM_DOF)
-                except Exception as exc:
-                    return failure(ErrorCode.IK_FAILED, f"{type(exc).__name__}: {exc}")
-            except Exception as exc:
-                return failure(ErrorCode.IK_FAILED, f"{type(exc).__name__}: {exc}")
-            if not np.all(np.isfinite(candidate)):
-                continue
-            if np.any(candidate < PANDA_LOWER - 1e-9) or np.any(candidate > PANDA_UPPER + 1e-9):
-                continue
-            transform = np.asarray(self._fk(candidate))
-            if float(np.linalg.norm(transform[:3, 3] - matrix[:3, 3])) > POSITION_TOLERANCE_M:
-                continue
-            # Orientation must survive too: a pose is position AND rotation.
-            alignment = float(np.trace(transform[:3, :3].T @ matrix[:3, :3]))
-            if alignment < 1.0 + 2.0 * np.cos(np.deg2rad(3.0)):
-                continue
-            cost = float(np.linalg.norm(candidate - seed))
-            if cost < best_cost:
-                best, best_cost = candidate, cost
+        seeded_from = "measured"
+        swept = self._sweep(matrix, seed)
+        if isinstance(swept, IKResult):
+            return swept
+        best, best_cost = swept
+        if best is None:
+            seeded_from = "home"
+            swept = self._sweep(matrix, PANDA_HOME)
+            if isinstance(swept, IKResult):
+                return swept
+            best, best_cost = swept
         if best is None:
             return failure(
                 ErrorCode.IK_UNREACHABLE,
@@ -113,10 +97,62 @@ class FrankaIKProvider:
             diagnostics={
                 "position_residual_mm": round(residual * 1000, 3),
                 "q7": round(float(best[6]), 4),
-                "seed_distance_rad": round(best_cost, 4),
+                "seed_distance_rad": round(float(np.linalg.norm(best - seed)), 4),
+                "seeded_from": seeded_from,
             },
             embodiment=robot_state.embodiment,
         )
+
+    def _sweep(self, matrix: np.ndarray, seed: np.ndarray):
+        """The valid solution nearest ``seed`` over the wrist joint's range.
+
+        q_7 parameterizes Franka's redundancy, and the right value depends on
+        the requested orientation: a down-grasp turned 48 degrees needs the
+        wrist turned with it, so pinning q_7 at the seed's value makes every
+        rotated pose "unreachable" (found live, first stack attempt).
+        Returns ``(best, cost)`` with ``best`` None when nothing in the seed's
+        branch is valid, or an ``IKResult`` failure when the solver itself
+        raised.
+        """
+        best: np.ndarray | None = None
+        best_cost = float("inf")
+        for q7 in np.arange(PANDA_LOWER[6] + 0.05, PANDA_UPPER[6] - 0.05 + 1e-9, 0.1):
+            try:
+                candidate = np.asarray(
+                    self._ik(matrix, q_init=seed, q_7=float(q7)), dtype=np.float64
+                ).reshape(ARM_DOF)
+            except TypeError:
+                try:
+                    candidate = np.asarray(self._ik(matrix), dtype=np.float64).reshape(ARM_DOF)
+                except Exception as exc:
+                    return IKResult(
+                        ok=False,
+                        error=ApiError(
+                            code=ErrorCode.IK_FAILED, message=f"{type(exc).__name__}: {exc}"
+                        ),
+                    )
+            except Exception as exc:
+                return IKResult(
+                    ok=False,
+                    error=ApiError(
+                        code=ErrorCode.IK_FAILED, message=f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+            if not np.all(np.isfinite(candidate)):
+                continue
+            if np.any(candidate < PANDA_LOWER - 1e-9) or np.any(candidate > PANDA_UPPER + 1e-9):
+                continue
+            transform = np.asarray(self._fk(candidate))
+            if float(np.linalg.norm(transform[:3, 3] - matrix[:3, 3])) > POSITION_TOLERANCE_M:
+                continue
+            # Orientation must survive too: a pose is position AND rotation.
+            alignment = float(np.trace(transform[:3, :3].T @ matrix[:3, :3]))
+            if alignment < 1.0 + 2.0 * np.cos(np.deg2rad(3.0)):
+                continue
+            cost = float(np.linalg.norm(candidate - seed))
+            if cost < best_cost:
+                best, best_cost = candidate, cost
+        return best, best_cost
 
 
 __all__ = ["FrankaIKProvider"]

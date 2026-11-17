@@ -19,7 +19,7 @@ from cap_harness.franka_real.adapter import FrankaRealAdapter
 from cap_harness.franka_real.config import FrankaStationConfig
 from cap_harness.franka_real.env import ARM_DOF, RealFrankaEnv
 from cap_harness.franka_real.registry import FrankaRealTaskRegistry
-from cap_harness.providers.franka_kinematics import FrankaIKProvider
+from cap_harness.providers.franka_kinematics import FrankaIKProvider, PANDA_LOWER, PANDA_UPPER
 from cap_harness.registry import FRANKA_REAL_PUBLIC_TOOL_NAMES, ToolRegistry
 from cap_harness.yam_real.cameras import SyntheticCamera
 
@@ -681,6 +681,42 @@ def test_ik_provider_round_trips_through_the_same_fk():
     refused = provider.solve_ik(unreachable, state)
     assert refused.ok is False
     assert refused.error.code in (ErrorCode.IK_UNREACHABLE, ErrorCode.IK_FAILED)
+
+
+def test_real_solver_reseeds_from_home_when_the_arm_has_wound_into_another_branch():
+    """Regression for run 0229: after five round trips the arm sat at
+    q = (-1.835, -1.457, 1.82, -2.147, 1.591, 1.837, -0.038), shoulder turned
+    105 degrees with the forearm turned back, and the retreat straight up from
+    the place -- a pose reached on every earlier leg -- was 'unreachable'
+    because the analytical solver stays in its seed's branch."""
+    panda_py = pytest.importorskip("panda_py")
+
+    provider = FrankaIKProvider(ik=panda_py.ik, fk=panda_py.fk)
+    wound = np.array([-1.835, -1.457, 1.82, -2.147, 1.591, 1.837, -0.038])
+    state = RobotState(
+        joint_positions={"primary": wound},
+        joint_velocities={"primary": np.zeros(ARM_DOF)},
+        end_effector_poses={
+            "primary": Pose(
+                position=np.asarray(panda_py.fk(wound))[:3, 3],
+                quaternion_wxyz=np.array([0.0, 1.0, 0.0, 0.0]),
+                frame="base",
+            )
+        },
+        gripper_positions={"primary": 1.0},
+        base_frame="base",
+        embodiment="franka_real",
+    )
+    retreat = Pose(
+        position=np.array([0.53, 0.0, 0.14]),
+        quaternion_wxyz=np.array([0.0, 1.0, 0.0, 0.0]),
+        frame="base",
+    )
+    result = provider.solve_ik(retreat, state)
+    assert result.ok is True, result.error
+    assert np.allclose(np.asarray(panda_py.fk(result.joint_positions))[:3, 3], retreat.position, atol=0.005)
+    assert np.all(result.joint_positions >= PANDA_LOWER) and np.all(result.joint_positions <= PANDA_UPPER)
+    assert result.diagnostics["seeded_from"] == "home"
 
 
 def test_real_solver_reaches_a_yawed_down_grasp():
