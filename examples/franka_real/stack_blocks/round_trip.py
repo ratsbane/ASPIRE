@@ -22,6 +22,7 @@ NEAR_M = 0.07
 NADIR_M = 0.04   # farther than this from the survey spot, look again from above the block
 VERIFY_M = 0.03
 VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block as read
+DROPPED_M = 0.05      # seen farther than this from the release point: it left the jaws, not an eye error
 HELD_MIN = 0.08        # gripper fraction below which the close met air
 FINGER_HALF_OPEN_M = 0.040   # the fingers descend open: 80 mm between pads
 CAMERA_OFFSET = (-0.0595, -0.0087)  # the wrist camera's origin from the TCP, in the hand's x, y
@@ -562,6 +563,16 @@ for trip in range(ROUND_TRIPS):
         error = math.hypot(after["x"] - target[0], after["y"] - target[1])
         leg["found_at"] = [round(after["x"], 4), round(after["y"], 4)]
         leg["error_m"] = round(error, 4)
+        slipped = math.hypot(after["x"] - placed["released_at"][0],
+                             after["y"] - placed["released_at"][1])
+        if slipped > DROPPED_M:
+            # The block is nowhere near where the hand released it: it left
+            # the jaws on the carry (runs 0189, 0202), and that is not an eye
+            # error to learn from (a 16 cm "residual" once went in at half
+            # weight and bent the correction by 8 cm).
+            leg["status"] = "dropped"
+            leg["slipped_m"] = round(slipped, 4)
+            break
         # Teach the eye from the hand: seen against released-at. The camera
         # bracket moves; this keeps its correction current, every leg.
         lesson = franka_real.report_hand_eye_residual(

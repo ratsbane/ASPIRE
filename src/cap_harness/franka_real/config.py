@@ -137,7 +137,7 @@ class FrankaStationConfig:
     model's drift, 6 N rode its own threshold in free air."""
 
     gripper_max_width_m: float = 0.08
-    gripper_force_n: float = 25.0
+    gripper_force_n: float = 40.0
     joint_limits_lower: tuple[float, ...] = (
         -2.8973,
         -1.7628,
