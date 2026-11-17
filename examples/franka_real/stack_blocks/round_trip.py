@@ -150,20 +150,36 @@ def pick(block, yaw):
     # height: the open-loop generator once stopped 8 mm high inside its joint
     # tolerance and still reported converged, and the pads then closed above
     # the block (run 0015). The hand reaches a floor to a millimetre; a
-    # contact stop above it means a pad is standing on something.
-    if not must(move_to_pose(pose(block["x"], block["y"], grasp_z + PRE_PLACE_ABOVE_M, quat),
-                             max_steps=LONG_MOVE_STEPS), "approach"):
-        return None
-    reach = franka_real.descend_to_contact(floor_z=grasp_z)
-    if not must(reach, "descend"):
-        return None
-    if reach.diagnostics["stop"] != "floor":
+    # contact stop above it means a pad is standing on the block, i.e. the
+    # block lies off along the finger axis by more than the open fingers
+    # forgive -- so the approach is retried shifted along that axis (runs
+    # 0033, 0049: the eye's look-to-look wobble on a loose mount is ~2 cm).
+    shifts = [0.0, 0.025, -0.025, 0.05, -0.05]
+    x0, y0 = block["x"], block["y"]
+    attempts = []
+    for shift in shifts:
+        x = x0 + shift * math.cos(yaw)
+        y = y0 + shift * math.sin(yaw)
+        if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
+                                 max_steps=LONG_MOVE_STEPS), "approach"):
+            return None
+        reach = franka_real.descend_to_contact(floor_z=grasp_z)
+        if not must(reach, "descend"):
+            return None
+        attempts.append({"shift": shift, "stop": reach.diagnostics["stop"],
+                         "z": reach.diagnostics["contact_z"]})
+        if reach.diagnostics["stop"] == "floor":
+            block["x"], block["y"] = x, y  # where the fingers actually straddled it
+            break
+        if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
+                                 max_steps=LONG_MOVE_STEPS), "re_approach"):
+            return None
+    else:
         open_gripper()
-        must(move_to_pose(pose(block["x"], block["y"], SAFE_Z, quat),
-                          max_steps=LONG_MOVE_STEPS), "lift")
+        must(move_to_pose(pose(x0, y0, SAFE_Z, quat), max_steps=LONG_MOVE_STEPS), "lift")
         return {"held": 0.0, "quat": quat, "ok": False,
-                "approach": reach.diagnostics["stop"],
-                "approach_z": reach.diagnostics["contact_z"]}
+                "approach": attempts[-1]["stop"], "approach_z": attempts[-1]["z"],
+                "attempts": attempts}
     set_gripper(0.25)
     held = float(get_robot_state().gripper_positions["primary"])
     if held < HELD_MIN:
@@ -174,7 +190,7 @@ def pick(block, yaw):
     if not must(move_to_pose(pose(block["x"], block["y"], CARRY_Z, quat),
                              max_steps=LONG_MOVE_STEPS), "lift"):
         return None
-    return {"held": held, "quat": quat, "ok": True}
+    return {"held": held, "quat": quat, "ok": True, "attempts": attempts}
 
 
 def place(block, grasp, slot):
@@ -246,6 +262,7 @@ for trip in range(ROUND_TRIPS):
             leg["status"] = "move_failed"
             break
         leg["held"] = round(grasp["held"], 3)
+        leg["approach_attempts"] = grasp.get("attempts")
         if not grasp["ok"]:
             leg["status"] = "approach_blocked" if "approach" in grasp else "air_close"
             leg["approach"] = grasp.get("approach")
