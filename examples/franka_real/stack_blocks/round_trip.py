@@ -117,17 +117,41 @@ def neighbours(block):
     return out
 
 
+def finger_axis(yaw):
+    # down_quat(yaw) points the hand's x axis along `yaw`; the Franka Hand's
+    # fingers travel along the hand's y axis, i.e. along yaw - 90 degrees.
+    # (Checked 2026-11-17 against the hold width: 59 mm, the block's length,
+    # after a day of "closing across the short axis" with 12 mm of margin.)
+    return yaw - math.pi / 2.0
+
+
+def grasp_yaw(geometry):
+    """Fingers across the block's 28 mm width, by the shortest wrist turn.
+
+    The gripper is symmetric, so yaw and yaw + 180 are the same grasp; the
+    block's axis comes back anywhere in a full turn, and half of those were
+    needless half-turns of the wrist that also swung the camera to the other
+    side of the hand. Folded into (-90, 90].
+    """
+    yaw = box_yaw(geometry)  # the long axis; fingers travel at yaw - 90, across the width
+    while yaw > math.pi / 2.0:
+        yaw -= math.pi
+    while yaw <= -math.pi / 2.0:
+        yaw += math.pi
+    return yaw
+
+
 def finger_clear(block, yaw, others):
-    # With down_quat(yaw) the fingers travel along `yaw`; open, they land
-    # FINGER_HALF_OPEN_M either side of the block along that line. A pad
-    # landing inside a neighbour's oriented footprint, grown by the pad and a
-    # clearance, is a collision (run 0010: the descent to grasp fired the
-    # reflex). A circle of the longest extent was too cautious (run 0013: a
-    # neighbour 8 cm away blocked the good grasp and the fallback closed on air).
+    # Open, the pads land FINGER_HALF_OPEN_M either side of the block along
+    # the finger axis. A pad landing inside a neighbour's oriented footprint,
+    # grown by the pad and a clearance, is a collision (run 0010: the descent
+    # to grasp fired the reflex). A circle of the longest extent was too
+    # cautious (run 0013).
     margin = FINGER_PAD_HALF_M + NEIGHBOUR_CLEAR_M
+    axis = finger_axis(yaw)
     for sign in (1.0, -1.0):
-        fx = block["x"] + sign * FINGER_HALF_OPEN_M * math.cos(yaw)
-        fy = block["y"] + sign * FINGER_HALF_OPEN_M * math.sin(yaw)
+        fx = block["x"] + sign * FINGER_HALF_OPEN_M * math.cos(axis)
+        fy = block["y"] + sign * FINGER_HALF_OPEN_M * math.sin(axis)
         for ox, oy, oyaw, long_half, short_half in others:
             dx, dy = fx - ox, fy - oy
             along = dx * math.cos(oyaw) + dy * math.sin(oyaw)
@@ -140,11 +164,11 @@ def finger_clear(block, yaw, others):
 def choose_yaw(block, others):
     """The grasp across the short axis, or the neighbour that blocks it.
 
-    Closing along the long axis is not a fallback: with 80 mm between the pads
+    Closing across the length is not a fallback: with 80 mm between the pads
     and a 55 mm block the margin is 12 mm a side, inside the localization
-    error, and both live attempts (runs 0013, 0014) closed on air.
+    error -- which, it turned out, is the grasp every run before 0106 made.
     """
-    yaw = box_yaw(block["geometry"]) + math.pi / 2.0
+    yaw = grasp_yaw(block["geometry"])
     return yaw, finger_clear(block, yaw, others)
 
 
@@ -174,16 +198,17 @@ def pick(block, yaw):
     # 0033, 0049: the eye's look-to-look wobble on a loose mount is ~2 cm).
     # Shifts along the finger axis (a pad on the block, or air: the block is
     # off along the fingers) and across it (air with the block off the
-    # pads' line). The eye after a camera change can be 4 cm out; the
-    # straddle forgives 2.6 along and ~2 across.
+    # pads' line). The eye after a camera change can be 4 cm out; across the
+    # width the straddle forgives 2.6 cm along the fingers and ~2 across.
     shifts = [(0.0, 0.0), (0.025, 0.0), (-0.025, 0.0), (0.05, 0.0), (-0.05, 0.0),
               (0.0, 0.025), (0.0, -0.025)]
+    axis = finger_axis(yaw)
     x0, y0 = block["x"], block["y"]
     attempts = []
     held = 0.0
     for along, across in shifts:
-        x = x0 + along * math.cos(yaw) - across * math.sin(yaw)
-        y = y0 + along * math.sin(yaw) + across * math.cos(yaw)
+        x = x0 + along * math.cos(axis) - across * math.sin(axis)
+        y = y0 + along * math.sin(axis) + across * math.cos(axis)
         if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
                                  max_steps=LONG_MOVE_STEPS), "approach"):
             return None
