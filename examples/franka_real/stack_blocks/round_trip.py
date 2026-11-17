@@ -263,6 +263,21 @@ def pick(block, yaw):
         attempt = {"along": along, "across": across, "stop": reach.diagnostics["stop"],
                    "z": reach.diagnostics["contact_z"]}
         attempts.append(attempt)
+        if reach.diagnostics["stop"] == "contact":
+            # A pad on the block pushes it (Doug watched it, run 0125: the
+            # block moved and the shifted retries closed on empty air). Look
+            # again from the hover height before searching any further, and
+            # search around where the block is now.
+            if not must(move_to_pose(pose(x, y, SAFE_Z, quat), max_steps=LONG_MOVE_STEPS),
+                        "re_look"):
+                return None
+            seen = localize_object(COLOUR + " block")
+            if seen.ok:
+                sx, sy = float(seen.geometry.pose.position[0]), float(seen.geometry.pose.position[1])
+                if math.hypot(sx - x0, sy - y0) < 0.08:
+                    attempt["moved_to"] = [round(sx, 4), round(sy, 4)]
+                    x0, y0 = sx, sy
+            continue
         if reach.diagnostics["stop"] == "floor":
             set_gripper(0.25)
             held = float(get_robot_state().gripper_positions["primary"])
