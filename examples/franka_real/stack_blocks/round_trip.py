@@ -36,12 +36,13 @@ NEIGHBOUR_CLEAR_M = 0.004  # a neighbour 9 cm off-nadir reads ~2.5 cm toward the
 SEED = int(get_task_context().metadata.get("seed", 0))
 COLOUR = ["blue", "green", "red"][SEED % 3]
 JITTER_M = 0.02
-FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12]]  # blue rests near the first; probing shoves it toward the second
+FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12], [0.55, -0.22]]  # the row, the far spot, the spare spots
 FIRST_NEAR_M = 0.15
 A = [0.53 + JITTER_M * ((SEED // 3) % 3 - 1), 0.00 + JITTER_M * ((SEED // 9) % 3 - 1)]
 B = [0.53 + JITTER_M * ((SEED // 27) % 3 - 1), -0.15 + JITTER_M * ((SEED // 3) % 3 - 1)]
-C = [0.60, -0.07]     # the spare spot, when A or B has a block in it: the front of the table
-                      # (the old (0.42, -0.12) had no IK for the retreat or the survey, run 0155)
+C = [0.60, -0.07]     # the spare spots, when A or B has a block in it: the front of the table
+D = [0.60, 0.06]      # (the old (0.42, -0.12) had no IK for the retreat or the survey, run 0155;
+E = [0.48, -0.22]     # with three colours in play two spares were not enough, run 0159)
 TARGET_CLEAR_M = 0.07  # another block this close to a spot makes it unusable
 REHOME_M = 0.08   # found farther than this from A: the first carry takes it home
 ROUND_TRIPS = 3
@@ -432,7 +433,7 @@ for trip in range(ROUND_TRIPS):
         # A) is not a place; take the first clear spot that is not where the
         # block already is, or stop.
         chosen = None
-        for spot in (target, B if target == A else A, C):
+        for spot in (target, B if target == A else A, C, D, E):
             if math.hypot(spot[0] - block["x"], spot[1] - block["y"]) < TARGET_CLEAR_M:
                 continue
             clear = spot_clear(spot)
@@ -522,7 +523,7 @@ verified = sum(1 for leg in legs if leg["status"] == "verified")
 result = {
     "ok": FAILED_MOVE["stage"] is None and verified == 2 * ROUND_TRIPS,
     "colour": COLOUR,
-    "spots": {"A": A, "B": B, "C": C},
+    "spots": {"A": A, "B": B, "C": C, "D": D, "E": E},
     "verified": verified,
     "of": 2 * ROUND_TRIPS,
     "legs": legs,
