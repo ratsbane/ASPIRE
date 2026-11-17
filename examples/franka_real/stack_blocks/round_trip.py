@@ -39,7 +39,8 @@ SEED = int(get_task_context().metadata.get("seed", 0))
 COLOURS = ["blue", "green", "red"]
 COLOUR = COLOURS[SEED % 3]   # the first choice; a colour the looks cannot find yields to the next
 JITTER_M = 0.02
-FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12], [0.55, -0.22], [0.45, -0.26]]  # the row, the far spot, the spares, red's corner
+FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12], [0.50, 0.12], [0.55, -0.22], [0.50, 0.22],
+               [0.45, -0.26]]  # the row, the far spot, both sides of the table, red's corner
 FIRST_NEAR_M = 0.15
 A = [0.53 + JITTER_M * ((SEED // 3) % 3 - 1), 0.00 + JITTER_M * ((SEED // 9) % 3 - 1)]
 B = [0.53 + JITTER_M * ((SEED // 27) % 3 - 1), -0.15 + JITTER_M * ((SEED // 3) % 3 - 1)]
