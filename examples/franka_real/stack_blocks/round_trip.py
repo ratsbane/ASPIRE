@@ -106,11 +106,13 @@ def see_lying(near, radius):
         top = float(geometry.pose.position[2]) + extents[2] / 2.0
         if max(extents) > 0.12:
             continue  # merged blobs
-        standing = top > 0.06  # a block on end tops at ~0.072, lying at ~0.045
+        # A block on end tops at ~0.072 and shows a ~28 mm square footprint;
+        # lying it tops at ~0.045 (bleed can read 0.05) and shows its length.
+        standing = top > 0.06 or max(extents[0], extents[1]) < 0.045
         if not (0.30 < px < 0.62 and -0.31 < py < 0.31):
             continue  # beyond where the hand can work above it (the box is 0.33; a lift at 0.334 was refused)
-        if standing and not (0.40 < px < 0.60 and -0.25 < py < 0.25):
-            continue  # a standing block near the edge is the lime's corner, not the task (run 0166)
+        if standing and abs(py) > 0.27:
+            continue  # a standing block at the table's edge is the lime's corner, not the task (run 0166)
         if math.hypot(px - near[0], py - near[1]) > radius:
             continue
         # Lying first; a standing one of the colour is still carried (blue
@@ -145,7 +147,7 @@ def find(near, radius=NEAR_M):
     extents = [float(v) for v in geometry.extents]
     return {"x": px, "y": py, "top": pz + extents[2] / 2.0,
             "footprint": max(extents[0], extents[1]),
-            "standing": pz + extents[2] / 2.0 > 0.06,
+            "standing": pz + extents[2] / 2.0 > 0.06 or max(extents[0], extents[1]) < 0.045,
             "geometry": geometry}
 
 
