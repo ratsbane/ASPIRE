@@ -34,7 +34,8 @@ NEIGHBOUR_CLEAR_M = 0.004  # a neighbour 9 cm off-nadir reads ~2.5 cm toward the
 # The colour and the spots vary by run seed, for a dataset that is not one
 # block on one pair of spots (Doug, 2026-11-17 evening).
 SEED = int(get_task_context().metadata.get("seed", 0))
-COLOUR = ["blue", "green", "red"][SEED % 3]
+COLOURS = ["blue", "green", "red"]
+COLOUR = COLOURS[SEED % 3]   # the first choice; a colour the looks cannot find yields to the next
 JITTER_M = 0.02
 FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12], [0.55, -0.22], [0.45, -0.26]]  # the row, the far spot, the spares, red's corner
 FIRST_NEAR_M = 0.15
@@ -464,8 +465,15 @@ for trip in range(ROUND_TRIPS):
         legs.append(leg)
         if len(legs) == 1:
             block = None
-            for look in FIRST_LOOKS:
-                block = find(look, FIRST_NEAR_M)
+            # The seed's colour first; if no lying block of it is within the
+            # hand's working area (red at the table's edge, runs 0173, 0182),
+            # the next colour, so the arm keeps practising.
+            for colour in [COLOUR] + [c for c in COLOURS if c != COLOUR]:
+                COLOUR = colour
+                for look in FIRST_LOOKS:
+                    block = find(look, FIRST_NEAR_M)
+                    if block is not None:
+                        break
                 if block is not None:
                     break
         else:
