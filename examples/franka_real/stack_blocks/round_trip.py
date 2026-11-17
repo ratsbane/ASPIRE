@@ -168,39 +168,45 @@ def pick(block, yaw):
     # block lies off along the finger axis by more than the open fingers
     # forgive -- so the approach is retried shifted along that axis (runs
     # 0033, 0049: the eye's look-to-look wobble on a loose mount is ~2 cm).
-    shifts = [0.0, 0.025, -0.025, 0.05, -0.05]
+    # Shifts along the finger axis (a pad on the block, or air: the block is
+    # off along the fingers) and across it (air with the block off the
+    # pads' line). The eye after a camera change can be 4 cm out; the
+    # straddle forgives 2.6 along and ~2 across.
+    shifts = [(0.0, 0.0), (0.025, 0.0), (-0.025, 0.0), (0.05, 0.0), (-0.05, 0.0),
+              (0.0, 0.025), (0.0, -0.025)]
     x0, y0 = block["x"], block["y"]
     attempts = []
-    for shift in shifts:
-        x = x0 + shift * math.cos(yaw)
-        y = y0 + shift * math.sin(yaw)
+    held = 0.0
+    for along, across in shifts:
+        x = x0 + along * math.cos(yaw) - across * math.sin(yaw)
+        y = y0 + along * math.sin(yaw) + across * math.cos(yaw)
         if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
                                  max_steps=LONG_MOVE_STEPS), "approach"):
             return None
         reach = franka_real.descend_to_contact(floor_z=grasp_z)
         if not must(reach, "descend"):
             return None
-        attempts.append({"shift": shift, "stop": reach.diagnostics["stop"],
-                         "z": reach.diagnostics["contact_z"]})
+        attempt = {"along": along, "across": across, "stop": reach.diagnostics["stop"],
+                   "z": reach.diagnostics["contact_z"]}
+        attempts.append(attempt)
         if reach.diagnostics["stop"] == "floor":
-            block["x"], block["y"] = x, y  # where the fingers actually straddled it
-            break
+            set_gripper(0.25)
+            held = float(get_robot_state().gripper_positions["primary"])
+            attempt["held"] = round(held, 3)
+            if held >= HELD_MIN:
+                block["x"], block["y"] = x, y  # where the fingers actually hold it
+                break
+            open_gripper()
         if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
                                  max_steps=LONG_MOVE_STEPS), "re_approach"):
             return None
     else:
         open_gripper()
         must(move_to_pose(pose(x0, y0, SAFE_Z, quat), max_steps=LONG_MOVE_STEPS), "lift")
-        return {"held": 0.0, "quat": quat, "ok": False,
-                "approach": attempts[-1]["stop"], "approach_z": attempts[-1]["z"],
-                "attempts": attempts}
-    set_gripper(0.25)
-    held = float(get_robot_state().gripper_positions["primary"])
-    if held < HELD_MIN:
-        open_gripper()
-        must(move_to_pose(pose(block["x"], block["y"], SAFE_Z, quat),
-                          max_steps=LONG_MOVE_STEPS), "lift")
-        return {"held": held, "quat": quat, "ok": False}
+        last = attempts[-1]
+        return {"held": held, "quat": quat, "ok": False,
+                "approach": "air" if last["stop"] == "floor" else last["stop"],
+                "approach_z": last["z"], "attempts": attempts}
     if not must(move_to_pose(pose(block["x"], block["y"], CARRY_Z, quat),
                              max_steps=LONG_MOVE_STEPS), "lift"):
         return None
@@ -278,7 +284,7 @@ for trip in range(ROUND_TRIPS):
         leg["held"] = round(grasp["held"], 3)
         leg["approach_attempts"] = grasp.get("attempts")
         if not grasp["ok"]:
-            leg["status"] = "approach_blocked" if "approach" in grasp else "air_close"
+            leg["status"] = "air_close" if grasp.get("approach") == "air" else "approach_blocked"
             leg["approach"] = grasp.get("approach")
             leg["approach_z"] = grasp.get("approach_z")
             break
