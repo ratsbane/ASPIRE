@@ -11,6 +11,7 @@ dynamics.
 from __future__ import annotations
 
 import json
+import time
 import numpy as np
 import pytest
 
@@ -207,13 +208,13 @@ class FakeGripper:
         return True
 
 
-def build(allow_motion: bool = True):
+def build(allow_motion: bool = True, camera=None):
     panda = FakePanda()
     env = RealFrankaEnv(
         FrankaStationConfig(),
         panda=panda,
         gripper=FakeGripper(),
-        camera=SyntheticCamera(),
+        camera=camera if camera is not None else SyntheticCamera(),
         fk=fake_fk,
         impedance_controller=lambda: FakeImpedanceController(panda),
         clock=panda.clock,
@@ -234,6 +235,40 @@ def home_trajectory(adapter, target):
         expected_start=state,
         embodiment="franka_real",
     )
+
+
+def test_observation_refuses_a_stale_wrist_frame(monkeypatch):
+    """Run 0242: the USB stream stalled 23 s before the final verify, the
+    camera thread kept handing out its last frame, and the verify called a
+    block lost that stood exactly where the hand had put it."""
+    from cap_harness.franka_real import adapter as adapter_module
+    from cap_harness.yam_real.cameras import CameraFrame
+
+    class StaleCamera(SyntheticCamera):
+        """Live for the reset's first look, then the stream stalls."""
+
+        stalled = False
+
+        def read(self):
+            frame = super().read()
+            if not self.stalled:
+                return frame
+            return CameraFrame(
+                rgb=frame.rgb,
+                depth_m=frame.depth_m,
+                intrinsics=frame.intrinsics,
+                timestamp_s=time.monotonic() - 30.0,
+            )
+
+    monkeypatch.setattr(adapter_module, "CAMERA_WAIT_S", 0.1)
+    camera = StaleCamera()
+    _, adapter = build(camera=camera)
+    assert adapter.get_observation().cameras["wrist"] is not None
+    camera.stalled = True
+    with pytest.raises(ValueError, match="stalled"):
+        adapter.get_observation()
+    _, live = build()
+    assert live.get_observation().cameras["wrist"] is not None
 
 
 def test_observation_carries_a_posed_wrist_camera():

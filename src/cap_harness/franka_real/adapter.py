@@ -54,6 +54,11 @@ CAMERA_FRAME = "wrist_camera"
 SCENE_FRAME = "scene_camera"
 JOINT_NAMES = tuple(f"panda_joint{index + 1}" for index in range(ARM_DOF))
 CAMERA_WAIT_S = 2.0
+CAMERA_STALE_S = 1.0
+"""A wrist frame older than this is no frame: the camera thread hands out its
+last frame forever when the USB stream stalls (run 0242: the stream stopped
+23 s before the final verify, which then saw the scene as it had been and
+called a block lost that stood exactly where the hand had put it)."""
 HAND_EYE_ALPHA = 0.5
 """Weight of one placement residual in the eye's running correction."""
 HAND_EYE_DRIFT_M = 0.02
@@ -474,17 +479,30 @@ class FrankaRealAdapter:
             embodiment=EMBODIMENT,
         )
 
+    @staticmethod
+    def _frame_age_s(frame: Any) -> float:
+        """Seconds since the frame was acquired; infinite for no frame."""
+        if frame is None:
+            return float("inf")
+        return max(0.0, time.monotonic() - float(frame.timestamp_s))
+
     def get_observation(self) -> Observation:
         state = self.get_robot_state()
         deadline = time.monotonic() + CAMERA_WAIT_S
         frame = self._env.capture()
-        while frame is None and time.monotonic() < deadline:
+        while self._frame_age_s(frame) > CAMERA_STALE_S and time.monotonic() < deadline:
             time.sleep(0.05)
             frame = self._env.capture()
         if frame is None:
             raise ValueError(
                 "the wrist camera produced no frame; the Observation contract "
                 "requires one, and a silent placeholder would be mistaken for a scene"
+            )
+        age = self._frame_age_s(frame)
+        if age > CAMERA_STALE_S:
+            raise ValueError(
+                f"the wrist camera's last frame is {age:.1f} s old: the stream has "
+                "stalled (USB), and a stale frame would be mistaken for the scene"
             )
         ee = pose_to_matrix(state.end_effector_poses[ARM])
         # `frame` names the camera's own optical frame; `camera_pose` maps it
