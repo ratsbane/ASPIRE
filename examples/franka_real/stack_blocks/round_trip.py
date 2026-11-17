@@ -39,8 +39,9 @@ SEED = int(get_task_context().metadata.get("seed", 0))
 COLOURS = ["blue", "green", "red"]
 COLOUR = COLOURS[SEED % 3]   # the first choice; a colour the looks cannot find yields to the next
 JITTER_M = 0.02
-FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12], [0.50, 0.12], [0.55, -0.22], [0.50, 0.22],
-               [0.45, -0.26]]  # the row, the far spot, both sides of the table, red's corner
+FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12], [0.50, 0.12], [0.55, -0.22],
+               [0.45, -0.26]]  # the row, the far spot, the near side, the spares, red's corner
+BASKET_Y = 0.20  # the basket stands beyond this on the positive side; nothing seen there is a task block
 FIRST_NEAR_M = 0.15
 A = [0.53 + JITTER_M * ((SEED // 3) % 3 - 1), 0.00 + JITTER_M * ((SEED // 9) % 3 - 1)]
 B = [0.53 + JITTER_M * ((SEED // 27) % 3 - 1), -0.15 + JITTER_M * ((SEED // 3) % 3 - 1)]
@@ -112,8 +113,9 @@ def see_lying(near, radius):
         # A block on end tops at ~0.072 and shows a ~28 mm square footprint;
         # lying it tops at ~0.045 (bleed can read 0.05) and shows its length.
         standing = top > 0.06 or max(extents[0], extents[1]) < 0.045
-        if not (0.30 < px < 0.62 and -0.31 < py < 0.31):
-            continue  # beyond where the hand can work above it (the box is 0.33; a lift at 0.334 was refused)
+        if not (0.30 < px < 0.62 and -0.31 < py < BASKET_Y):
+            continue  # beyond where the hand can work above it (the box is 0.33; a lift at 0.334 was refused),
+            # or in the basket (run 0219 reached for a blue block seen standing in it)
         if standing and abs(py) > 0.27:
             continue  # a standing block at the table's edge is the lime's corner, not the task (run 0166)
         if math.hypot(px - near[0], py - near[1]) > radius:
