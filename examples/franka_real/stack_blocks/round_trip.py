@@ -106,14 +106,24 @@ def neighbours(block):
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
         px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
         extents = [float(v) for v in geometry.extents]
-        if max(extents) > 0.10 or math.hypot(px - block["x"], py - block["y"]) < 0.02:
+        if max(extents) > 0.10:
             continue
         # Silhouette bleed inflates a nadir footprint (a 55 x 28 block read
         # 62-67 mm long and wider than it is); every block on this bench is
         # the same size, so the footprint is capped at what the block can be.
         long_half = min(max(extents[0], extents[1]) / 2.0, BLOCK_LONG_M / 2.0)
         short_half = min(min(extents[0], extents[1]) / 2.0, BLOCK_FLAT_M / 2.0)
-        out.append((px, py, box_yaw(geometry), long_half, short_half))
+        oyaw = box_yaw(geometry)
+        # The block itself, seen again: an instance whose footprint contains
+        # the block's centre. (A plain 2 cm radius missed a re-detection 2.2 cm
+        # off and "blocked" the pick with the block, run 0109. A touching
+        # neighbour's centre is at least a width away, outside its own box.)
+        dx, dy = block["x"] - px, block["y"] - py
+        along = dx * math.cos(oyaw) + dy * math.sin(oyaw)
+        across = -dx * math.sin(oyaw) + dy * math.cos(oyaw)
+        if abs(along) < long_half + 0.005 and abs(across) < short_half + 0.005:
+            continue
+        out.append((px, py, oyaw, long_half, short_half))
     return out
 
 
