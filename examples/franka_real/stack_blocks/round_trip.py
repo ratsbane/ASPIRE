@@ -104,14 +104,22 @@ def see_lying(near, radius):
         px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
         extents = [float(v) for v in geometry.extents]
         top = float(geometry.pose.position[2]) + extents[2] / 2.0
-        if max(extents) > 0.12 or top > 0.06:
-            continue  # merged blobs, or a block standing on end (top ~0.072; lying ~0.045)
+        if max(extents) > 0.12:
+            continue  # merged blobs
+        standing = top > 0.06  # a block on end tops at ~0.072, lying at ~0.045
         if not (0.30 < px < 0.62 and -0.31 < py < 0.31):
             continue  # beyond where the hand can work above it (the box is 0.33; a lift at 0.334 was refused)
+        if standing and not (0.40 < px < 0.60 and -0.25 < py < 0.25):
+            continue  # a standing block near the edge is the lime's corner, not the task (run 0166)
         if math.hypot(px - near[0], py - near[1]) > radius:
             continue
-        if best is None or float(seg.score) > best[1]:
-            best = (geometry, float(seg.score))
+        # Lying first; a standing one of the colour is still carried (blue
+        # once slipped from the jaws and landed on end mid-table, run 0189,
+        # and the lying-only rule then called it lost). The fingers close
+        # across its 28 mm at mid-height; the camera clears its top by 3 cm.
+        rank = (0 if standing else 1, float(seg.score))
+        if best is None or rank > best[1]:
+            best = (geometry, rank)
     return None if best is None else best[0]
 
 
@@ -137,6 +145,7 @@ def find(near, radius=NEAR_M):
     extents = [float(v) for v in geometry.extents]
     return {"x": px, "y": py, "top": pz + extents[2] / 2.0,
             "footprint": max(extents[0], extents[1]),
+            "standing": pz + extents[2] / 2.0 > 0.06,
             "geometry": geometry}
 
 
@@ -174,7 +183,8 @@ def neighbours(block):
         # Standing blocks matter to the camera (55 mm tall against a camera
         # underside ~50 mm above the pads, measured 2026-11-17); lying ones
         # (28 mm) pass 29 mm under it.
-        out.append((px, py, oyaw, long_half, short_half, extents[2] > 0.04))
+        top = float(geometry.pose.position[2]) + extents[2] / 2.0
+        out.append((px, py, oyaw, long_half, short_half, top > 0.06))
     return out
 
 
@@ -310,7 +320,7 @@ def choose_yaw(block, others):
 
 
 def contact_ee_z(block):
-    vertical = BLOCK_FLAT_M if block["footprint"] >= 0.045 else BLOCK_LONG_M
+    vertical = BLOCK_LONG_M if block.get("standing") or block["footprint"] < 0.045 else BLOCK_FLAT_M
     return TABLE_Z + (vertical - GRASP_OFFSET)
 
 
@@ -509,6 +519,7 @@ for trip in range(ROUND_TRIPS):
         leg["to"] = target
         leg["picked_from"] = [round(block["x"], 4), round(block["y"], 4)]
         leg["footprint"] = round(block["footprint"], 4)
+        leg["standing"] = bool(block["standing"])
         others = neighbours(block)
         yaw, blocked_by = choose_yaw(block, others)
         leg["neighbours"] = [[round(o[0], 3), round(o[1], 3)] for o in others]
