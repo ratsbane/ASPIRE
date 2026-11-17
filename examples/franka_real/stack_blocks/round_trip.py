@@ -392,21 +392,33 @@ def pick(block, yaw):
     return {"held": held, "quat": quat, "ok": True, "attempts": attempts}
 
 
-def spot_clear(spot):
-    """Whether no other block sits within TARGET_CLEAR_M of a place spot."""
-    if not must(survey(spot[0], spot[1]), "survey"):
+def blocks_in_view():
+    """Every block in one look from above the row's centre: (x, y) pairs.
+
+    One look serves every spot: a survey straight above a far spot (D at
+    x 0.60) left the motion generator unconverged at the edge of reach
+    (run 0178), and the row-centre look sees all the spots anyway.
+    """
+    if not must(survey(0.50, -0.05), "survey"):
         return None
     found = segment_text("wrist", "block")
     if not found.ok:
-        return True
+        return []
     depth = get_observation().cameras["wrist"].depth_m
+    seen = []
     for seg in found.segmentations[:12]:
         if float(seg.score) < 0.3 or not has_depth(seg, depth):
             continue
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
-        px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
         if max(float(v) for v in geometry.extents) > 0.12:
             continue
+        seen.append((float(geometry.pose.position[0]), float(geometry.pose.position[1])))
+    return seen
+
+
+def spot_clear(spot, seen):
+    """Whether no block in `seen` sits within TARGET_CLEAR_M of a place spot."""
+    for px, py in seen:
         if math.hypot(px - spot[0], py - spot[1]) < TARGET_CLEAR_M:
             return False
     return True
@@ -471,13 +483,14 @@ for trip in range(ROUND_TRIPS):
         # A) is not a place; take the first clear spot that is not where the
         # block already is, or stop.
         chosen = None
+        seen = blocks_in_view()
+        if seen is None:
+            leg["status"] = "move_failed"
+            break
         for spot in (target, B if target == A else A, C, D, E):
             if math.hypot(spot[0] - block["x"], spot[1] - block["y"]) < TARGET_CLEAR_M:
                 continue
-            clear = spot_clear(spot)
-            if clear is None:
-                break
-            if clear:
+            if spot_clear(spot, seen):
                 chosen = spot
                 break
         if chosen is None:
