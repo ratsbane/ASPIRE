@@ -59,8 +59,11 @@ CAMERA_STALE_S = 1.0
 last frame forever when the USB stream stalls (run 0242: the stream stopped
 23 s before the final verify, which then saw the scene as it had been and
 called a block lost that stood exactly where the hand had put it)."""
-HAND_EYE_ALPHA = 0.5
-"""Weight of one placement residual in the eye's running correction."""
+HAND_EYE_ALPHA = 0.15
+"""Weight of one placement residual in the eye's running correction. At 0.5
+the centimetre of noise in each residual walked the correction a few
+millimetres per leg (the hand-frame y component crept from 2 to 5 cm over
+an afternoon); touch anchors every batch now, so a placement only nudges."""
 HAND_EYE_DRIFT_M = 0.02
 """A residual beyond this is reported as drift: re-probe before trusting a look."""
 HAND_EYE_HISTORY = 100

@@ -607,17 +607,17 @@ def test_reported_residuals_teach_the_eye_and_persist(tmp_path):
     assert np.allclose(after - before, [0.0, -0.03, 0.0], atol=1e-4)
     # Later residuals are averaged in, touch included (probing shoves blocks).
     report = adapter.report_hand_eye_residual([0.40, -0.01], [0.40, 0.00])
-    assert report["alpha"] == 0.5 and report["drift"] is False
-    assert abs(report["offset_xyz"][1] - (-0.025)) < 1e-4
+    assert report["alpha"] == 0.15 and report["drift"] is False
+    assert abs(report["offset_xyz"][1] - (-0.0285)) < 1e-4
     report = adapter.report_hand_eye_residual([0.40, 0.00], [0.40, 0.00], source="touch")
-    assert report["alpha"] == 0.5
+    assert report["alpha"] == 0.15
     report = adapter.report_hand_eye_residual([0.40, 0.00], [0.40, 0.00], weight=1.0)
     assert report["alpha"] == 1.0
     assert adapter.get_controller_metadata()["wrist_correction_samples"] == 4
     # The correction outlives the adapter.
     assert correction.is_file()
     fresh = make()
-    assert np.allclose(fresh.wrist_correction_xyz_at(rotation), [0.0, -0.025, 0.0], atol=1e-4)
+    assert np.allclose(fresh.wrist_correction_xyz_at(rotation), [0.0, -0.0285, 0.0], atol=1e-4)
     with pytest.raises(ValueError):
         adapter.report_hand_eye_residual([0.4], [0.4, 0.0])
     # A file from the base-frame days is read as a yaw-zero, hand-down lesson.
