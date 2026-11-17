@@ -24,6 +24,9 @@ VERIFY_M = 0.03
 VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block as read
 HELD_MIN = 0.08        # gripper fraction below which the close met air
 FINGER_HALF_OPEN_M = 0.040   # the fingers descend open: 80 mm between pads
+CAMERA_OFFSET = (-0.0595, -0.0087)  # the wrist camera's origin from the TCP, in the hand's x, y
+CAMERA_HALF_M = 0.021        # the D405 housing is 42 mm square
+CAMERA_CLEAR_M = 0.0         # the camera's footprint must not overlap another block's
 FINGER_PAD_HALF_M = 0.008
 NEIGHBOUR_CLEAR_M = 0.004  # a neighbour 9 cm off-nadir reads ~2.5 cm toward the camera; the
                             # contact approach catches a pad on it and retries shifted (run 0101)
@@ -135,20 +138,49 @@ def finger_axis(yaw):
     return yaw - math.pi / 2.0
 
 
-def grasp_yaw(geometry):
-    """Fingers across the block's 28 mm width, by the shortest wrist turn.
-
-    The gripper is symmetric, so yaw and yaw + 180 are the same grasp; the
-    block's axis comes back anywhere in a full turn, and half of those were
-    needless half-turns of the wrist that also swung the camera to the other
-    side of the hand. Folded into (-90, 90].
-    """
-    yaw = box_yaw(geometry)  # the long axis; fingers travel at yaw - 90, across the width
-    while yaw > math.pi / 2.0:
-        yaw -= math.pi
-    while yaw <= -math.pi / 2.0:
-        yaw += math.pi
+def fold(yaw):
+    while yaw > math.pi:
+        yaw -= 2.0 * math.pi
+    while yaw <= -math.pi:
+        yaw += 2.0 * math.pi
     return yaw
+
+
+def camera_clearance(block, yaw, others):
+    """Distance from the wrist camera's footprint to the nearest other block.
+
+    The camera hangs CAMERA_OFFSET from the fingertips along the hand's x
+    axis (which down_quat(yaw) points along `yaw`); it is part of the hand's
+    footprint. Run 0114's seven failed attempts at one pick were the camera
+    body landing on blue's end and on green, never the fingers: contact
+    whenever its footprint overlapped a block, floor whenever it cleared.
+    """
+    cx = block["x"] + CAMERA_OFFSET[0] * math.cos(yaw) - CAMERA_OFFSET[1] * math.sin(yaw)
+    cy = block["y"] + CAMERA_OFFSET[0] * math.sin(yaw) + CAMERA_OFFSET[1] * math.cos(yaw)
+    nearest = 1.0
+    for ox, oy, oyaw, long_half, short_half in others:
+        dx, dy = cx - ox, cy - oy
+        along = abs(dx * math.cos(oyaw) + dy * math.sin(oyaw)) - long_half
+        across = abs(-dx * math.sin(oyaw) + dy * math.cos(oyaw)) - short_half
+        nearest = min(nearest, max(along, across) - CAMERA_HALF_M)
+    return nearest
+
+
+def grasp_yaw(block, others):
+    """Fingers across the block's 28 mm width, with the camera on the clear side.
+
+    The gripper is symmetric, so yaw and yaw + 180 are the same grasp for
+    the fingers but not for the camera, which swings to the other side of
+    the hand. Of the two, take the one whose camera footprint is farther
+    from every other block; the shorter wrist turn breaks a tie.
+    """
+    base = box_yaw(block["geometry"])  # the long axis; fingers travel at yaw - 90, across the width
+    options = []
+    for candidate in (fold(base), fold(base + math.pi)):
+        options.append((round(camera_clearance(block, candidate, others), 3),
+                        -abs(candidate), candidate))
+    options.sort(reverse=True)
+    return options[0][2], options[0][0]
 
 
 def finger_clear(block, yaw, others):
@@ -178,8 +210,11 @@ def choose_yaw(block, others):
     and a 55 mm block the margin is 12 mm a side, inside the localization
     error -- which, it turned out, is the grasp every run before 0106 made.
     """
-    yaw = grasp_yaw(block["geometry"])
-    return yaw, finger_clear(block, yaw, others)
+    yaw, camera_room = grasp_yaw(block, others)
+    blocked_by = finger_clear(block, yaw, others)
+    if blocked_by is None and camera_room < CAMERA_CLEAR_M:
+        blocked_by = ["camera", round(camera_room, 3)]
+    return yaw, blocked_by
 
 
 def contact_ee_z(block):
