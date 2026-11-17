@@ -58,7 +58,9 @@ def down(x, y, z):
 
 
 def see(target):
-    """The wrist camera's estimate of the target: the instance nearest its spot."""
+    """The wrist camera's estimate of the target: the best-scoring instance
+    within reach of its expected spot. (Nearest-to-the-spot measured green
+    twice as "blue" in run 0032: a colour prompt returns every block, scored.)"""
     found = segment_text("wrist", target["prompt"])
     if not found.ok:
         return None
@@ -69,10 +71,12 @@ def see(target):
         extents = [float(v) for v in geometry.extents]
         if max(extents) > 0.12:
             continue
-        distance = math.hypot(px - target["near"][0], py - target["near"][1])
-        if best is None or distance < best[1]:
-            best = (geometry, distance)
-    if best is None or best[1] > 0.10:
+        if math.hypot(px - target["near"][0], py - target["near"][1]) > 0.15:
+            continue
+        score = float(seg.score)
+        if best is None or score > best[1]:
+            best = (geometry, score)
+    if best is None or best[1] < 0.5:
         return None
     geometry = best[0]
     px, py, pz = (float(v) for v in geometry.pose.position)
