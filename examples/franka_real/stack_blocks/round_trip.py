@@ -32,6 +32,8 @@ FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12]]  # blue rests near the first; probin
 FIRST_NEAR_M = 0.15
 A = [0.50, 0.00]
 B = [0.50, -0.15]
+C = [0.42, -0.12]     # the spare spot, when A or B has a block in it
+TARGET_CLEAR_M = 0.07  # another block this close to a spot makes it unusable
 REHOME_M = 0.08   # found farther than this from A: the first carry takes it home
 ROUND_TRIPS = 3
 
@@ -214,6 +216,25 @@ def pick(block, yaw):
     return {"held": held, "quat": quat, "ok": True, "attempts": attempts}
 
 
+def spot_clear(spot):
+    """Whether no other block sits within TARGET_CLEAR_M of a place spot."""
+    if not must(survey(spot[0], spot[1]), "survey"):
+        return None
+    found = segment_text("wrist", "block")
+    if not found.ok:
+        return True
+    for seg in found.segmentations[:12]:
+        if float(seg.score) < 0.3:
+            continue
+        geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
+        px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
+        if max(float(v) for v in geometry.extents) > 0.12:
+            continue
+        if math.hypot(px - spot[0], py - spot[1]) < TARGET_CLEAR_M:
+            return False
+    return True
+
+
 def place(block, grasp, slot):
     expect_z = contact_ee_z(block)
     quat = grasp["quat"]
@@ -268,6 +289,24 @@ for trip in range(ROUND_TRIPS):
             rehome = math.hypot(block["x"] - A[0], block["y"] - A[1]) > REHOME_M
             leg["rehome"] = rehome
         target = (A if rehome else B) if outbound else (B if rehome else A)
+        # A spot with another block in it (run 0085 left the lime standing at
+        # A) is not a place; take the first clear spot that is not where the
+        # block already is, or stop.
+        chosen = None
+        for spot in (target, B if target == A else A, C):
+            if math.hypot(spot[0] - block["x"], spot[1] - block["y"]) < TARGET_CLEAR_M:
+                continue
+            clear = spot_clear(spot)
+            if clear is None:
+                break
+            if clear:
+                chosen = spot
+                break
+        if chosen is None:
+            leg["status"] = "target_blocked"
+            break
+        leg["target_moved"] = chosen != target
+        target = chosen
         leg["to"] = target
         leg["picked_from"] = [round(block["x"], 4), round(block["y"], 4)]
         leg["footprint"] = round(block["footprint"], 4)
