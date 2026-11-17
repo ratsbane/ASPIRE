@@ -179,8 +179,14 @@ for target in TARGETS:
     entry["seen_minus_touched"] = [round(seen["x"] - truth[0], 4), round(seen["y"] - truth[1], 4)]
     entry["status"] = "measured"
     # A touched position is the strongest evidence the eye gets: taken whole.
+    # It is also the only evidence along the block's length: the fingers
+    # centre a held block across their travel, so a placement residual can
+    # see the eye's error on that axis, but along the length a biased grasp
+    # is carried from pick to place and back and reads as zero forever. Six
+    # grasps of run 0231 all sat 15-20 mm from one end with residuals under
+    # a centimetre; the correction file then held no touch sample at all.
     lesson = franka_real.report_hand_eye_residual(
-        [seen["x"], seen["y"]], truth, source="touch")
+        [seen["x"], seen["y"]], truth, source="touch", weight=1.0)
     entry["eye_offset_xyz"] = lesson["offset_xyz"]
     entry["eye_drift"] = bool(lesson["drift"])
     # A refused retreat (reach limit above the block) costs nothing: the
