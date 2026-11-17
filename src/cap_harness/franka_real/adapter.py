@@ -103,6 +103,7 @@ class FrankaRealAdapter:
                 frame="ee",
             )
         )
+        self._last_look_rotation: np.ndarray | None = None
         self._wrist_correction = self._load_wrist_correction()
         """The eye's running correction; see :meth:`report_hand_eye_residual`."""
         self._last_level: tuple[np.ndarray, float] | None = None
@@ -199,13 +200,29 @@ class FrankaRealAdapter:
         )
 
     def _load_wrist_correction(self) -> dict[str, Any]:
-        blank: dict[str, Any] = {"offset_xyz": [0.0, 0.0, 0.0], "samples": 0, "history": []}
+        blank: dict[str, Any] = {
+            "offset_hand_xyz": [0.0, 0.0, 0.0],
+            "frame": "hand",
+            "samples": 0,
+            "history": [],
+        }
         try:
             data = json.loads(self._correction_path().read_text(encoding="utf-8"))
         except Exception:
             return blank
-        if not isinstance(data, dict) or "offset_xyz" not in data:
+        if not isinstance(data, dict):
             return blank
+        if "offset_hand_xyz" not in data:
+            if "offset_xyz" not in data:
+                return blank
+            # A file from when the correction was a base-frame shift, learned
+            # almost entirely with the hand pointing down at yaw zero, where
+            # hand x is base x and hand y is base -y.
+            base = np.asarray(data["offset_xyz"], dtype=np.float64).reshape(3)
+            data["offset_hand_xyz"] = [round(float(base[0]), 4), round(float(-base[1]), 4), 0.0]
+            data["migrated_from_base_xyz"] = [float(v) for v in base]
+            data.pop("offset_xyz", None)
+        data["frame"] = "hand"
         data.setdefault("samples", 0)
         data.setdefault("history", [])
         return data
@@ -219,8 +236,20 @@ class FrankaRealAdapter:
             pass  # the correction still applies for this run
 
     @property
-    def wrist_correction_xyz(self) -> np.ndarray:
-        return np.asarray(self._wrist_correction["offset_xyz"], dtype=np.float64).reshape(3)
+    def wrist_correction_hand_xyz(self) -> np.ndarray:
+        """The eye's running correction, a translation in the hand (EE) frame."""
+        return np.asarray(self._wrist_correction["offset_hand_xyz"], dtype=np.float64).reshape(3)
+
+    def wrist_correction_xyz_at(self, ee_rotation: np.ndarray) -> np.ndarray:
+        """The correction as a base-frame shift for a hand with this rotation."""
+        return np.asarray(ee_rotation, dtype=np.float64).reshape(3, 3) @ self.wrist_correction_hand_xyz
+
+    def _look_rotation(self) -> np.ndarray:
+        """The hand's rotation at the last look, or now if nothing has looked."""
+        if self._last_look_rotation is not None:
+            return self._last_look_rotation
+        state = self.get_robot_state()
+        return pose_to_matrix(state.end_effector_poses[ARM])[:3, :3]
 
     def report_hand_eye_residual(
         self,
@@ -239,10 +268,18 @@ class FrankaRealAdapter:
         are a starting point and this is the rest. Every verified placement is
         a sample for free -- the hand's position at release is truth to a few
         millimetres -- and a touch-probed position is a stronger one. The
-        correction is a base-frame translation of the camera pose, updated by
-        an exponential average and persisted between runs; a residual beyond
-        ``HAND_EYE_DRIFT_M`` is reported as drift so the program can decide to
-        re-probe rather than trust the next look.
+        correction is a translation of the camera pose in the hand frame,
+        where a mount that has shifted or tilted actually puts the error, so
+        a lesson learned at one wrist yaw holds at every other; it is updated
+        by an exponential average and persisted between runs. A residual
+        beyond ``HAND_EYE_DRIFT_M`` is reported as drift so the program can
+        decide to re-probe rather than trust the next look.
+
+        What a placement can teach is bounded: the fingers centre a held
+        block along their travel, so the residual exposes the eye's error on
+        that axis, but across the fingers (along the block's length, in the
+        usual grasp) a biased grasp is carried from pick to place and back
+        and reads as zero. Touch is the evidence on that axis.
         """
         seen = np.asarray(seen_xy, dtype=np.float64).reshape(-1)[:2]
         truth = np.asarray(truth_xy, dtype=np.float64).reshape(-1)[:2]
@@ -260,19 +297,23 @@ class FrankaRealAdapter:
             # pads shove a light block while finding it, so even touch is
             # averaged in once a correction exists.
             alpha = HAND_EYE_ALPHA
-        offset = self.wrist_correction_xyz.copy()
-        offset[:2] -= alpha * residual
+        rotation = self._look_rotation()
+        residual_hand = rotation.T @ np.array([residual[0], residual[1], 0.0])
+        offset = self.wrist_correction_hand_xyz.copy()
+        offset -= alpha * residual_hand
         history = list(self._wrist_correction.get("history", []))[-(HAND_EYE_HISTORY - 1) :]
         history.append(
             {
                 "t": time.time(),
                 "source": str(source),
                 "residual_xy": [round(float(v), 4) for v in residual],
+                "residual_hand_xyz": [round(float(v), 4) for v in residual_hand],
                 "alpha": alpha,
             }
         )
         self._wrist_correction = {
-            "offset_xyz": [round(float(v), 4) for v in offset],
+            "offset_hand_xyz": [round(float(v), 4) for v in offset],
+            "frame": "hand",
             "samples": samples + 1,
             "history": history,
         }
@@ -282,7 +323,8 @@ class FrankaRealAdapter:
             "residual_m": round(magnitude, 4),
             "drift": magnitude > HAND_EYE_DRIFT_M,
             "alpha": alpha,
-            "offset_xyz": list(self._wrist_correction["offset_xyz"]),
+            "offset_xyz": [round(float(v), 4) for v in (rotation @ offset)],
+            "offset_hand_xyz": list(self._wrist_correction["offset_hand_xyz"]),
             "samples": samples + 1,
             "source": str(source),
         }
@@ -451,10 +493,12 @@ class FrankaRealAdapter:
         # transform and hands back camera-frame points labelled "base".
         camera_matrix = ee @ self._hand_eye
         # First level the eye against the table it can see, then apply the
-        # running correction learned from the hand: a base-frame shift of the
-        # camera pose moves every back-projected point by the same amount.
+        # running correction learned from the hand: a hand-frame shift of the
+        # camera pose, turned with the wrist, moves every back-projected
+        # point by the same amount.
         camera_matrix, self.last_level_report = self._level_to_table(frame, camera_matrix)
-        camera_matrix[:3, 3] += self.wrist_correction_xyz
+        self._last_look_rotation = np.array(ee[:3, :3], dtype=np.float64)
+        camera_matrix[:3, 3] += self.wrist_correction_xyz_at(ee[:3, :3])
         camera_pose = matrix_to_pose(camera_matrix, frame=BASE_FRAME)
         camera = CameraObservation(
             rgb=frame.rgb,
@@ -793,7 +837,7 @@ class FrankaRealAdapter:
             },
             "physical_motion_authorized": self._allow_physical_motion,
             "motions_executed": self._env.motions_executed,
-            "wrist_correction_xyz": list(self._wrist_correction["offset_xyz"]),
+            "wrist_correction_hand_xyz": list(self._wrist_correction["offset_hand_xyz"]),
             "wrist_correction_samples": int(self._wrist_correction.get("samples", 0)),
             "wrist_level": dict(self.last_level_report),
         }

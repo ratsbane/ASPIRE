@@ -10,12 +10,13 @@ dynamics.
 
 from __future__ import annotations
 
+import json
 import numpy as np
 import pytest
 
 from cap_harness.contracts import ArmCommand, Pose, RobotAction, RobotState, Trajectory
 from cap_harness.errors import ErrorCode
-from cap_harness.franka_real.adapter import FrankaRealAdapter
+from cap_harness.franka_real.adapter import pose_to_matrix, FrankaRealAdapter
 from cap_harness.franka_real.config import FrankaStationConfig
 from cap_harness.franka_real.env import ARM_DOF, RealFrankaEnv
 from cap_harness.franka_real.registry import FrankaRealTaskRegistry
@@ -558,17 +559,21 @@ def test_reported_residuals_teach_the_eye_and_persist(tmp_path):
 
     adapter = make()
     before = adapter.get_observation().cameras["wrist"].camera_pose.position.copy()
+    rotation = pose_to_matrix(adapter.get_robot_state().end_effector_poses["primary"])[:3, :3]
     # The camera saw the block 3 cm further in +y than the hand placed it.
     report = adapter.report_hand_eye_residual([0.50, 0.03], [0.50, 0.00])
     assert report["alpha"] == 1.0  # the first sample is taken whole
     assert report["drift"] is True
-    assert report["offset_xyz"] == [0.0, -0.03, 0.0]
+    assert np.allclose(report["offset_xyz"], [0.0, -0.03, 0.0], atol=1e-4)
+    # Kept in the hand frame, where a shifted mount puts the error, so the
+    # lesson turns with the wrist.
+    assert np.allclose(report["offset_hand_xyz"], rotation.T @ [0.0, -0.03, 0.0], atol=1e-4)
     after = adapter.get_observation().cameras["wrist"].camera_pose.position
-    assert np.allclose(after - before, [0.0, -0.03, 0.0])
+    assert np.allclose(after - before, [0.0, -0.03, 0.0], atol=1e-4)
     # Later residuals are averaged in, touch included (probing shoves blocks).
     report = adapter.report_hand_eye_residual([0.40, -0.01], [0.40, 0.00])
     assert report["alpha"] == 0.5 and report["drift"] is False
-    assert abs(report["offset_xyz"][1] - (-0.025)) < 1e-9
+    assert abs(report["offset_xyz"][1] - (-0.025)) < 1e-4
     report = adapter.report_hand_eye_residual([0.40, 0.00], [0.40, 0.00], source="touch")
     assert report["alpha"] == 0.5
     report = adapter.report_hand_eye_residual([0.40, 0.00], [0.40, 0.00], weight=1.0)
@@ -577,9 +582,13 @@ def test_reported_residuals_teach_the_eye_and_persist(tmp_path):
     # The correction outlives the adapter.
     assert correction.is_file()
     fresh = make()
-    assert np.allclose(fresh.wrist_correction_xyz, [0.0, -0.025, 0.0])
+    assert np.allclose(fresh.wrist_correction_xyz_at(rotation), [0.0, -0.025, 0.0], atol=1e-4)
     with pytest.raises(ValueError):
         adapter.report_hand_eye_residual([0.4], [0.4, 0.0])
+    # A file from the base-frame days is read as a yaw-zero, hand-down lesson.
+    correction.write_text(json.dumps({"offset_xyz": [0.01, 0.02, 0.0], "samples": 3, "history": []}))
+    old = make()
+    assert np.allclose(old.wrist_correction_hand_xyz, [0.01, -0.02, 0.0])
 
 
 def _tilted_camera_config(tilt_deg: float) -> FrankaStationConfig:
