@@ -565,11 +565,13 @@ def test_reported_residuals_teach_the_eye_and_persist(tmp_path):
     assert report["offset_xyz"] == [0.0, -0.03, 0.0]
     after = adapter.get_observation().cameras["wrist"].camera_pose.position
     assert np.allclose(after - before, [0.0, -0.03, 0.0])
-    # A second placement residual is averaged in; a touch one is taken whole.
+    # Later residuals are averaged in, touch included (probing shoves blocks).
     report = adapter.report_hand_eye_residual([0.40, -0.01], [0.40, 0.00])
     assert report["alpha"] == 0.5 and report["drift"] is False
     assert abs(report["offset_xyz"][1] - (-0.025)) < 1e-9
     report = adapter.report_hand_eye_residual([0.40, 0.00], [0.40, 0.00], source="touch")
+    assert report["alpha"] == 0.5
+    report = adapter.report_hand_eye_residual([0.40, 0.00], [0.40, 0.00], weight=1.0)
     assert report["alpha"] == 1.0
     assert adapter.get_controller_metadata()["wrist_correction_samples"] == 3
     # The correction outlives the adapter.

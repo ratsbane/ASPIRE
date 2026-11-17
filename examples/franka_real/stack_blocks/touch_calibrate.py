@@ -137,8 +137,11 @@ for target in TARGETS:
     entry = {"name": target["name"]}
     measurements.append(entry)
     near = target["near"]
-    if not must(survey(near[0], near[1]), "survey"):
-        break
+    if not survey(near[0], near[1]).ok:
+        # A refused survey (step budget, reach) loses this target, not the
+        # calibration: one block measured is enough (run 0052).
+        entry["status"] = "not_surveyed"
+        continue
     seen = see(target)
     entry["seen"] = seen
     if seen is None:
@@ -166,14 +169,11 @@ for target in TARGETS:
     if not hits:
         entry["status"] = "no_hits"
         continue
-    coarse = centroid(hits)
-    entry["coarse_centroid"] = [round(v, 4) for v in coarse]
-    hits2, probes2, ok = grid_hits(coarse[0], coarse[1], FINE_PITCH_M, FINE_HALF, top_est, floor_z)
-    entry["fine_probes"] = probes2
-    if not ok:
-        entry["status"] = "move_failed"
-        break
-    truth = centroid(hits + hits2) if hits2 else coarse
+    # The coarse centroid is the measurement, to about a centimetre. A fine
+    # pass at 1 cm pitch was tried (runs 0019-0052): nine more pads on the
+    # block's edges at 3 N walked it 2-3 cm per calibration, and the
+    # "residual" was then partly the block moving. The placements refine.
+    truth = centroid(hits)
     entry["touched"] = [round(v, 4) for v in truth]
     entry["seen_minus_touched"] = [round(seen["x"] - truth[0], 4), round(seen["y"] - truth[1], 4)]
     entry["status"] = "measured"

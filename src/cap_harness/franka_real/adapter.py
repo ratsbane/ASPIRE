@@ -238,9 +238,12 @@ class FrankaRealAdapter:
         samples = int(self._wrist_correction.get("samples", 0))
         if weight is not None:
             alpha = float(np.clip(weight, 0.0, 1.0))
-        elif samples == 0 or source == "touch":
-            alpha = 1.0
+        elif samples == 0:
+            alpha = 1.0  # the first sample bootstraps the correction whole
         else:
+            # A touch probe is stronger than a look, but not flawless: the
+            # pads shove a light block while finding it, so even touch is
+            # averaged in once a correction exists.
             alpha = HAND_EYE_ALPHA
         offset = self.wrist_correction_xyz.copy()
         offset[:2] -= alpha * residual
