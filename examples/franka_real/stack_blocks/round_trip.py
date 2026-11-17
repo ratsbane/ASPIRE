@@ -45,9 +45,12 @@ BASKET_Y = 0.12  # the basket stands beyond this on the positive side (its blue 
 FIRST_NEAR_M = 0.15
 A = [0.53 + JITTER_M * ((SEED // 3) % 3 - 1), 0.00 + JITTER_M * ((SEED // 9) % 3 - 1)]
 B = [0.53 + JITTER_M * ((SEED // 27) % 3 - 1), -0.15 + JITTER_M * ((SEED // 3) % 3 - 1)]
-C = [0.60, -0.07]     # the spare spots, when A or B has a block in it: the front of the table
-D = [0.60, 0.06]      # (the old (0.42, -0.12) had no IK for the retreat or the survey, run 0155;
-E = [0.48, -0.22]     # with three colours in play two spares were not enough, run 0159)
+C = [0.57, -0.07]     # the spare spots, when A or B has a block in it: the front of the table
+D = [0.57, 0.06]      # (the old (0.42, -0.12) had no IK for the retreat or the survey, run 0155;
+E = [0.48, -0.22]     # with three colours in play two spares were not enough, run 0159;
+                      # at x 0.60 the grasp search's shifts reached x 0.627 with the fingers open
+                      # and twice pushed the red block off the front edge, runs 0221 and 0224)
+PICK_X_MAX = 0.60     # no grasp attempt is centred beyond this: the front edge is near
 TARGET_CLEAR_M = 0.07  # another block this close to a spot makes it unusable
 REHOME_M = 0.08   # found farther than this from A: the first carry takes it home
 ROUND_TRIPS = 3
@@ -368,6 +371,8 @@ def pick(block, yaw):
     while queue and len(attempts) < MAX_APPROACHES:
         along, across = queue.pop(0)
         x = x0 + along * math.cos(axis) - across * math.sin(axis)
+        if x > PICK_X_MAX:
+            continue  # an attempt that far forward would sweep the block off the table
         y = y0 + along * math.sin(axis) + across * math.cos(axis)
         if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
                                  max_steps=LONG_MOVE_STEPS), "approach"):
