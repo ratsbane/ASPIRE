@@ -442,6 +442,7 @@ def test_extension_tools_register_under_the_approved_prefix():
     assert "franka_real.get_task_metadata" in names
     assert "franka_real.get_controller_metadata" in names
     assert "franka_real.descend_to_contact" in names
+    assert "franka_real.report_hand_eye_residual" in names
     assert "move_to_pose" in names
 
 
@@ -532,6 +533,51 @@ def test_episode_recorder_writes_arm_log_cameras_and_events(tmp_path):
     assert (tmp_path / "media" / "videos" / f"{role}-images-rgb.mp4").exists()
     assert np.load(raw / f"camera-{role}-fresh.npy").dtype == bool
     assert meta["clock_pairs"][0]["label"] == "start"
+
+
+def test_reported_residuals_teach_the_eye_and_persist(tmp_path):
+    from cap_harness.franka_real.config import FrankaCameraConfig
+
+    correction = tmp_path / "wrist-correction.json"
+    config = FrankaStationConfig(camera=FrankaCameraConfig(correction_file=str(correction)))
+
+    def make():
+        panda = FakePanda()
+        env = RealFrankaEnv(
+            config,
+            panda=panda,
+            gripper=FakeGripper(),
+            camera=SyntheticCamera(),
+            fk=fake_fk,
+            impedance_controller=lambda: FakeImpedanceController(panda),
+            clock=panda.clock,
+        )
+        adapter = FrankaRealAdapter(env, allow_physical_motion=True)
+        adapter.reset("stack_blocks", 0)
+        return adapter
+
+    adapter = make()
+    before = adapter.get_observation().cameras["wrist"].camera_pose.position.copy()
+    # The camera saw the block 3 cm further in +y than the hand placed it.
+    report = adapter.report_hand_eye_residual([0.50, 0.03], [0.50, 0.00])
+    assert report["alpha"] == 1.0  # the first sample is taken whole
+    assert report["drift"] is True
+    assert report["offset_xyz"] == [0.0, -0.03, 0.0]
+    after = adapter.get_observation().cameras["wrist"].camera_pose.position
+    assert np.allclose(after - before, [0.0, -0.03, 0.0])
+    # A second placement residual is averaged in; a touch one is taken whole.
+    report = adapter.report_hand_eye_residual([0.40, -0.01], [0.40, 0.00])
+    assert report["alpha"] == 0.5 and report["drift"] is False
+    assert abs(report["offset_xyz"][1] - (-0.025)) < 1e-9
+    report = adapter.report_hand_eye_residual([0.40, 0.00], [0.40, 0.00], source="touch")
+    assert report["alpha"] == 1.0
+    assert adapter.get_controller_metadata()["wrist_correction_samples"] == 3
+    # The correction outlives the adapter.
+    assert correction.is_file()
+    fresh = make()
+    assert np.allclose(fresh.wrist_correction_xyz, [0.0, -0.025, 0.0])
+    with pytest.raises(ValueError):
+        adapter.report_hand_eye_residual([0.4], [0.4, 0.0])
 
 
 def test_contact_descent_is_guarded_like_a_waypoint():
@@ -950,6 +996,7 @@ def test_clutter_example_programs_pass_the_sandbox_validator():
         "stack_blocks/touch_table.py",
         "stack_blocks/round_trip.py",
         "stack_blocks/cross_check.py",
+        "stack_blocks/touch_calibrate.py",
     ):
         source = (examples / relative).read_text()
         _ProgramValidator().visit(ast.parse(source))  # raises on a violation

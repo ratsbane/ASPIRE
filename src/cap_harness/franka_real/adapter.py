@@ -20,6 +20,7 @@ protocol's conservative ``False``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import time
 from typing import Any, Mapping, Optional
@@ -53,6 +54,11 @@ CAMERA_FRAME = "wrist_camera"
 SCENE_FRAME = "scene_camera"
 JOINT_NAMES = tuple(f"panda_joint{index + 1}" for index in range(ARM_DOF))
 CAMERA_WAIT_S = 2.0
+HAND_EYE_ALPHA = 0.5
+"""Weight of one placement residual in the eye's running correction."""
+HAND_EYE_DRIFT_M = 0.02
+"""A residual beyond this is reported as drift: re-probe before trusting a look."""
+HAND_EYE_HISTORY = 100
 
 
 class FrankaRealAdapter:
@@ -83,6 +89,107 @@ class FrankaRealAdapter:
                 frame="ee",
             )
         )
+        self._wrist_correction = self._load_wrist_correction()
+        """The eye's running correction; see :meth:`report_hand_eye_residual`."""
+
+    # -- the eye's running correction --------------------------------------
+
+    def _correction_path(self) -> Path:
+        configured = getattr(self._env.config.camera, "correction_file", None)
+        if configured:
+            return Path(configured).expanduser()
+        return (
+            Path.home()
+            / ".cap_harness"
+            / "franka_real"
+            / f"{self._env.config.station}-wrist-correction.json"
+        )
+
+    def _load_wrist_correction(self) -> dict[str, Any]:
+        blank: dict[str, Any] = {"offset_xyz": [0.0, 0.0, 0.0], "samples": 0, "history": []}
+        try:
+            data = json.loads(self._correction_path().read_text(encoding="utf-8"))
+        except Exception:
+            return blank
+        if not isinstance(data, dict) or "offset_xyz" not in data:
+            return blank
+        data.setdefault("samples", 0)
+        data.setdefault("history", [])
+        return data
+
+    def _save_wrist_correction(self) -> None:
+        try:
+            path = self._correction_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._wrist_correction, indent=1), encoding="utf-8")
+        except Exception:
+            pass  # the correction still applies for this run
+
+    @property
+    def wrist_correction_xyz(self) -> np.ndarray:
+        return np.asarray(self._wrist_correction["offset_xyz"], dtype=np.float64).reshape(3)
+
+    def report_hand_eye_residual(
+        self,
+        seen_xy: object,
+        truth_xy: object,
+        *,
+        source: str = "placement",
+        weight: float | None = None,
+    ) -> dict[str, Any]:
+        """Teach the eye from the hand: where the camera saw an object against
+        where the hand or a touch probe found it, both in the base frame.
+
+        Exposed to programs as ``franka_real.report_hand_eye_residual``. The
+        wrist camera's bracket moves (2026-11-17: a few degrees, centimetres
+        on the table, between two legs of one run), so the hand-eye numbers
+        are a starting point and this is the rest. Every verified placement is
+        a sample for free -- the hand's position at release is truth to a few
+        millimetres -- and a touch-probed position is a stronger one. The
+        correction is a base-frame translation of the camera pose, updated by
+        an exponential average and persisted between runs; a residual beyond
+        ``HAND_EYE_DRIFT_M`` is reported as drift so the program can decide to
+        re-probe rather than trust the next look.
+        """
+        seen = np.asarray(seen_xy, dtype=np.float64).reshape(-1)[:2]
+        truth = np.asarray(truth_xy, dtype=np.float64).reshape(-1)[:2]
+        if seen.shape != (2,) or truth.shape != (2,) or not np.all(np.isfinite(seen - truth)):
+            raise ValueError("seen_xy and truth_xy must each be two finite numbers")
+        residual = seen - truth
+        magnitude = float(np.linalg.norm(residual))
+        samples = int(self._wrist_correction.get("samples", 0))
+        if weight is not None:
+            alpha = float(np.clip(weight, 0.0, 1.0))
+        elif samples == 0 or source == "touch":
+            alpha = 1.0
+        else:
+            alpha = HAND_EYE_ALPHA
+        offset = self.wrist_correction_xyz.copy()
+        offset[:2] -= alpha * residual
+        history = list(self._wrist_correction.get("history", []))[-(HAND_EYE_HISTORY - 1) :]
+        history.append(
+            {
+                "t": time.time(),
+                "source": str(source),
+                "residual_xy": [round(float(v), 4) for v in residual],
+                "alpha": alpha,
+            }
+        )
+        self._wrist_correction = {
+            "offset_xyz": [round(float(v), 4) for v in offset],
+            "samples": samples + 1,
+            "history": history,
+        }
+        self._save_wrist_correction()
+        return {
+            "residual_xy": [round(float(v), 4) for v in residual],
+            "residual_m": round(magnitude, 4),
+            "drift": magnitude > HAND_EYE_DRIFT_M,
+            "alpha": alpha,
+            "offset_xyz": list(self._wrist_correction["offset_xyz"]),
+            "samples": samples + 1,
+            "source": str(source),
+        }
 
     # -- identity ----------------------------------------------------------
 
@@ -246,7 +353,11 @@ class FrankaRealAdapter:
         # into the base frame, which is what lets mask back-projection land in
         # world coordinates. Setting both to the base frame silently skips the
         # transform and hands back camera-frame points labelled "base".
-        camera_pose = matrix_to_pose(ee @ self._hand_eye, frame=BASE_FRAME)
+        camera_matrix = ee @ self._hand_eye
+        # The eye's running correction: a base-frame shift of the camera pose
+        # moves every back-projected point by the same amount.
+        camera_matrix[:3, 3] += self.wrist_correction_xyz
+        camera_pose = matrix_to_pose(camera_matrix, frame=BASE_FRAME)
         camera = CameraObservation(
             rgb=frame.rgb,
             depth_m=frame.depth_m,
@@ -584,6 +695,8 @@ class FrankaRealAdapter:
             },
             "physical_motion_authorized": self._allow_physical_motion,
             "motions_executed": self._env.motions_executed,
+            "wrist_correction_xyz": list(self._wrist_correction["offset_xyz"]),
+            "wrist_correction_samples": int(self._wrist_correction.get("samples", 0)),
         }
 
     def close(self) -> None:

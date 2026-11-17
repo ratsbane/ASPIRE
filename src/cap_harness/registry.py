@@ -80,6 +80,7 @@ FRANKA_REAL_PUBLIC_TOOL_NAMES = frozenset(
         "franka_real.get_task_metadata",
         "franka_real.get_controller_metadata",
         "franka_real.descend_to_contact",
+        "franka_real.report_hand_eye_residual",
     }
 )
 

@@ -6,7 +6,7 @@
 
 SURVEY_Z = 0.33
 LONG_MOVE_STEPS = 600
-SURVEYS = [[0.45, 0.0], [0.45, -0.12]]
+SURVEYS = [[0.50, 0.0], [0.45, -0.12]]  # the first matches the round trip's survey
 COLOURS = ("blue", "green", "red")
 
 

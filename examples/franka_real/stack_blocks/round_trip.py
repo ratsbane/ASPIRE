@@ -184,6 +184,10 @@ def place(block, grasp, slot):
     touch = franka_real.descend_to_contact(floor_z=max(expect_z - FLOOR_BELOW_M, 0.004))
     must(touch, "lower")
     report = touch.diagnostics if touch.ok else {}
+    # Where the hand is at release is where the block is, to a few mm: the
+    # truth the eye is checked against after the re-localize.
+    hand = get_robot_state().end_effector_poses["primary"].position
+    truth = [float(hand[0]), float(hand[1])]
     set_gripper(min(1.0, grasp["held"] + 0.2))
     must(move_to_pose(pose(slot[0], slot[1], SAFE_Z, quat), max_steps=LONG_MOVE_STEPS),
          "retreat")
@@ -194,7 +198,8 @@ def place(block, grasp, slot):
             "stop": report.get("stop"),
             "force_rise_n": report.get("force_rise_n"),
             "lag_m": report.get("lag_m"),
-            "drift_xy_m": report.get("drift_xy_m")}
+            "drift_xy_m": report.get("drift_xy_m"),
+            "released_at": [round(truth[0], 4), round(truth[1], 4)]}
 
 
 legs = []
@@ -238,6 +243,13 @@ for trip in range(ROUND_TRIPS):
         error = math.hypot(after["x"] - target[0], after["y"] - target[1])
         leg["found_at"] = [round(after["x"], 4), round(after["y"], 4)]
         leg["error_m"] = round(error, 4)
+        # Teach the eye from the hand: seen against released-at. The camera
+        # bracket moves; this keeps its correction current, every leg.
+        lesson = franka_real.report_hand_eye_residual(
+            [after["x"], after["y"]], placed["released_at"])
+        leg["eye_residual_xy"] = lesson["residual_xy"]
+        leg["eye_drift"] = bool(lesson["drift"])
+        leg["eye_offset_xyz"] = lesson["offset_xyz"]
         leg["status"] = "verified" if error < VERIFY_M else "off_target"
         origin = [after["x"], after["y"]]
         if leg["status"] != "verified":

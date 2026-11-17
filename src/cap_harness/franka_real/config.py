@@ -50,6 +50,14 @@ class FrankaCameraConfig:
     table when the hand points down), image axes matching the bench's measured
     u->world-y, v->world-x convention at yaw zero."""
 
+    correction_file: str | None = None
+    """Where the adapter keeps the eye's running correction (JSON): a base-frame
+    translation of the camera pose, updated from every reported residual
+    between what the camera saw and where the hand or a touch probe found the
+    object. None means ``~/.cap_harness/franka_real/<station>-wrist-correction.json``.
+    The bracket is loose (2026-11-17); the numbers above are where the camera
+    was, this file is where it is."""
+
 
 @dataclass(frozen=True, slots=True)
 class FrankaSceneCameraConfig:
