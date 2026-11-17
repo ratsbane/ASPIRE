@@ -102,10 +102,11 @@ def see_lying(near, radius):
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
         px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
         extents = [float(v) for v in geometry.extents]
-        if max(extents) > 0.12 or extents[2] > 0.045:
-            continue  # merged blobs, or a block standing on end
-        if not (0.30 < px < 0.62 and -0.29 < py < 0.29):
-            continue  # beyond where the hand can work above it
+        top = float(geometry.pose.position[2]) + extents[2] / 2.0
+        if max(extents) > 0.12 or top > 0.06:
+            continue  # merged blobs, or a block standing on end (top ~0.072; lying ~0.045)
+        if not (0.30 < px < 0.62 and -0.31 < py < 0.31):
+            continue  # beyond where the hand can work above it (the box is 0.33; a lift at 0.334 was refused)
         if math.hypot(px - near[0], py - near[1]) > radius:
             continue
         if best is None or float(seg.score) > best[1]:
