@@ -31,11 +31,15 @@ FINGER_PAD_HALF_M = 0.008
 NEIGHBOUR_CLEAR_M = 0.004  # a neighbour 9 cm off-nadir reads ~2.5 cm toward the camera; the
                             # contact approach catches a pad on it and retries shifted (run 0101)
 
-COLOUR = "blue"
+# The colour and the spots vary by run seed, for a dataset that is not one
+# block on one pair of spots (Doug, 2026-11-17 evening).
+SEED = int(get_task_context().metadata.get("seed", 0))
+COLOUR = ["blue", "green", "red"][SEED % 3]
+JITTER_M = 0.02
 FIRST_LOOKS = [[0.50, 0.00], [0.50, -0.12]]  # blue rests near the first; probing shoves it toward the second
 FIRST_NEAR_M = 0.15
-A = [0.53, 0.00]      # 12 cm from green's row spot: a pick beside a 2-3 cm eye error still clears
-B = [0.53, -0.15]
+A = [0.53 + JITTER_M * ((SEED // 3) % 3 - 1), 0.00 + JITTER_M * ((SEED // 9) % 3 - 1)]
+B = [0.53 + JITTER_M * ((SEED // 27) % 3 - 1), -0.15 + JITTER_M * ((SEED // 3) % 3 - 1)]
 C = [0.60, -0.07]     # the spare spot, when A or B has a block in it: the front of the table
                       # (the old (0.42, -0.12) had no IK for the retreat or the survey, run 0155)
 TARGET_CLEAR_M = 0.07  # another block this close to a spot makes it unusable
@@ -517,6 +521,8 @@ go_home()
 verified = sum(1 for leg in legs if leg["status"] == "verified")
 result = {
     "ok": FAILED_MOVE["stage"] is None and verified == 2 * ROUND_TRIPS,
+    "colour": COLOUR,
+    "spots": {"A": A, "B": B, "C": C},
     "verified": verified,
     "of": 2 * ROUND_TRIPS,
     "legs": legs,
