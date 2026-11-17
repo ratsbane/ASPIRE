@@ -26,7 +26,8 @@ FINGER_PAD_HALF_M = 0.008
 NEIGHBOUR_CLEAR_M = 0.010
 
 COLOUR = "blue"
-A = [0.50, 0.00]
+A_NOMINAL = [0.50, 0.00]   # where blue usually rests; the first look may find it elsewhere
+FIRST_NEAR_M = 0.15        # (a calibration's probing shoved it 9 cm, run 0029)
 B = [0.50, -0.15]
 ROUND_TRIPS = 3
 
@@ -55,7 +56,7 @@ def survey(x, y):
                          "rpy_deg": [180.0, 0.0, 0.0]}, max_steps=LONG_MOVE_STEPS)
 
 
-def find(near):
+def find(near, radius=NEAR_M):
     if not must(survey(near[0], near[1]), "survey"):
         return None
     found = localize_object(COLOUR + " block")
@@ -64,7 +65,7 @@ def find(near):
     px, py, pz = (float(v) for v in found.geometry.pose.position)
     if not (0.25 < px < 0.66 and -0.33 < py < 0.33):
         return None
-    if math.hypot(px - near[0], py - near[1]) > NEAR_M:
+    if math.hypot(px - near[0], py - near[1]) > radius:
         return None
     extents = [float(v) for v in found.geometry.extents]
     return {"x": px, "y": py, "top": pz + extents[2] / 2.0,
@@ -203,15 +204,21 @@ def place(block, grasp, slot):
 
 
 legs = []
-origin = A
+origin = A_NOMINAL
+A = None  # fixed by the first look: the block is carried back to where it was found
 for trip in range(ROUND_TRIPS):
-    for target in (B, A):
-        leg = {"trip": trip, "from": origin, "to": target, "status": "started"}
+    for outbound in (True, False):
+        leg = {"trip": trip, "from": origin, "status": "started"}
         legs.append(leg)
-        block = find(origin)
+        block = find(origin, FIRST_NEAR_M if A is None else NEAR_M)
         if block is None:
             leg["status"] = "not_found"
             break
+        if A is None:
+            A = [round(block["x"], 4), round(block["y"], 4)]
+            leg["a"] = A
+        target = B if outbound else A
+        leg["to"] = target
         leg["picked_from"] = [round(block["x"], 4), round(block["y"], 4)]
         leg["footprint"] = round(block["footprint"], 4)
         others = neighbours(block)

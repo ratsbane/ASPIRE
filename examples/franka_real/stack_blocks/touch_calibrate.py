@@ -81,9 +81,12 @@ def see(target):
 
 
 def probe(x, y, top_est, floor_z):
-    """One contact descent at (x, y): (stop height, pushed back) or None."""
-    if not must(down(x, y, max(top_est, BARE_HAND_TABLE_Z) + PROBE_ABOVE_M), "pre_probe"):
-        return None
+    """One contact descent at (x, y): (stop height, pushed back), "unreachable", or None."""
+    approach = down(x, y, max(top_est, BARE_HAND_TABLE_Z) + PROBE_ABOVE_M)
+    if not approach.ok:
+        # A cell the arm cannot reach straight down is a cell without data,
+        # not a failed calibration (run 0024 died on one at the grid's edge).
+        return "unreachable"
     touch = franka_real.descend_to_contact(floor_z=floor_z, contact_force_n=PROBE_FORCE_N)
     if not must(touch, "probe"):
         return None
@@ -104,6 +107,9 @@ def grid_hits(cx, cy, pitch, half, top_est, floor_z):
             felt = probe(x, y, top_est, floor_z)
             if felt is None:
                 return hits, probes, False
+            if felt == "unreachable":
+                probes.append([round(x, 4), round(y, 4), None, False])
+                continue
             z, pushed = felt
             hit = pushed and z > BARE_HAND_TABLE_Z + HIT_ABOVE_TABLE_M and z > floor_z + 0.004
             probes.append([round(x, 4), round(y, 4), round(z, 4), hit])
@@ -139,6 +145,14 @@ for target in TARGETS:
     if not ok:
         entry["status"] = "move_failed"
         break
+    unreachable = sum(1 for p in probes if p[2] is None)
+    if unreachable > len(probes) // 5:
+        # Half a grid finds half a block: the centroid of the hits leans
+        # toward the reachable side (run 0028: green at x 0.42 lost 10 of 15
+        # cells and came out 12 mm off). Not evidence.
+        entry["status"] = "partial_grid"
+        entry["unreachable"] = unreachable
+        continue
     if not hits:
         entry["status"] = "no_hits"
         continue
