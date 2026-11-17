@@ -180,6 +180,8 @@ def neighbours(block):
         across = -dx * math.sin(oyaw) + dy * math.cos(oyaw)
         if abs(along) < long_half + 0.005 and abs(across) < short_half + 0.005:
             continue
+        if math.hypot(dx, dy) < 0.025:
+            continue  # a re-detection of the block 1.9 cm off (run 0193); a touching neighbour's centre is 2.8 cm away
         # Standing blocks matter to the camera (55 mm tall against a camera
         # underside ~50 mm above the pads, measured 2026-11-17); lying ones
         # (28 mm) pass 29 mm under it.
