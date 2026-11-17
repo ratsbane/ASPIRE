@@ -72,6 +72,17 @@ def survey(x, y):
                          "rpy_deg": [180.0, 0.0, 0.0]}, max_steps=LONG_MOVE_STEPS)
 
 
+def has_depth(seg, depth):
+    """Whether a mask covers enough valid depth to back-project.
+
+    mask_to_point_cloud raises on a mask with no valid depth, and a sandboxed
+    program cannot catch that (runs 0040, 0169); a confident mask at the
+    image's edge or over a depth hole is such a mask.
+    """
+    covered = depth[seg.mask]
+    return int((covered > 0.1).sum()) >= 50
+
+
 def see_lying(near, radius):
     """The best-scoring lying block of the colour within reach of `near`.
 
@@ -83,9 +94,10 @@ def see_lying(near, radius):
     found = segment_text("wrist", COLOUR + " block")
     if not found.ok:
         return None
+    depth = get_observation().cameras["wrist"].depth_m
     best = None
     for seg in found.segmentations[:8]:
-        if float(seg.score) < 0.5:
+        if float(seg.score) < 0.5 or not has_depth(seg, depth):
             continue
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
         px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
@@ -132,10 +144,11 @@ def neighbours(block):
     found = segment_text("wrist", "block")
     if not found.ok:
         return []
+    depth = get_observation().cameras["wrist"].depth_m
     out = []
     for seg in found.segmentations[:12]:
-        if float(seg.score) < 0.3:
-            continue  # a weak mask may hold no valid depth; back-projecting it raises
+        if float(seg.score) < 0.3 or not has_depth(seg, depth):
+            continue  # a mask with no valid depth cannot be back-projected
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
         px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
         extents = [float(v) for v in geometry.extents]
@@ -385,8 +398,9 @@ def spot_clear(spot):
     found = segment_text("wrist", "block")
     if not found.ok:
         return True
+    depth = get_observation().cameras["wrist"].depth_m
     for seg in found.segmentations[:12]:
-        if float(seg.score) < 0.3:
+        if float(seg.score) < 0.3 or not has_depth(seg, depth):
             continue
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
         px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
