@@ -25,6 +25,7 @@ VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block
 DROPPED_M = 0.05      # seen farther than this from the release point: it left the jaws, not an eye error
 HELD_MIN = 0.08        # gripper fraction below which the close met air
 FINGER_HALF_OPEN_M = 0.040   # the fingers descend open: 80 mm between pads
+MAX_APPROACHES = 12          # grasp attempts per pick, re-looks included
 CAMERA_OFFSET = (-0.0595, -0.0087)  # the wrist camera's origin from the TCP, in the hand's x, y
 CAMERA_HALF_M = 0.021        # the D405 housing is 42 mm square
 CAMERA_CLEAR_M = 0.0         # the camera's footprint must not overlap another block's
@@ -353,12 +354,15 @@ def pick(block, yaw):
     # pads' line). The eye after a camera change can be 4 cm out; across the
     # width the straddle forgives 2.6 cm along the fingers and ~2 across.
     shifts = [(0.0, 0.0), (0.025, 0.0), (-0.025, 0.0), (0.05, 0.0), (-0.05, 0.0),
-              (0.0, 0.025), (0.0, -0.025)]
+              (0.0, 0.025), (0.0, -0.025), (0.025, 0.025), (-0.025, -0.025),
+              (0.025, -0.025), (-0.025, 0.025)]
     axis = finger_axis(yaw)
     x0, y0 = block["x"], block["y"]
     attempts = []
     held = 0.0
-    for along, across in shifts:
+    queue = list(shifts)
+    while queue and len(attempts) < MAX_APPROACHES:
+        along, across = queue.pop(0)
         x = x0 + along * math.cos(axis) - across * math.sin(axis)
         y = y0 + along * math.sin(axis) + across * math.cos(axis)
         if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
@@ -383,6 +387,9 @@ def pick(block, yaw):
                 sx, sy = float(seen.pose.position[0]), float(seen.pose.position[1])
                 attempt["moved_to"] = [round(sx, 4), round(sy, 4)]
                 x0, y0 = sx, sy
+                # The search starts over around where the block is now (run
+                # 0206: after a re-look only one shift remained, and it missed).
+                queue = [shift for shift in shifts if shift != (along, across)]
             continue
         if reach.diagnostics["stop"] == "floor":
             set_gripper(0.25)
