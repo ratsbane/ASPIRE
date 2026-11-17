@@ -182,7 +182,9 @@ for target in TARGETS:
         [seen["x"], seen["y"]], truth, source="touch")
     entry["eye_offset_xyz"] = lesson["offset_xyz"]
     entry["eye_drift"] = bool(lesson["drift"])
-    must(down(truth[0], truth[1], 0.14), "retreat")
+    # A refused retreat (reach limit above the block) costs nothing: the
+    # measurement is already reported, and go_home follows (run 0072).
+    down(truth[0], truth[1], 0.14)
 go_home()
 
 measured = [m for m in measurements if m.get("status") == "measured"]
