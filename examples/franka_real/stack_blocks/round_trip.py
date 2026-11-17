@@ -17,7 +17,7 @@ FLOOR_BELOW_M = 0.015
 CARRY_Z = 0.22
 SAFE_Z = 0.14
 SURVEY_Z = 0.33
-LONG_MOVE_STEPS = 600
+LONG_MOVE_STEPS = 900   # a lift from the spare spot once planned past 600 (run 0134)
 NEAR_M = 0.07
 NADIR_M = 0.04   # farther than this from the survey spot, look again from above the block
 VERIFY_M = 0.03
@@ -196,7 +196,8 @@ def grasp_yaw(block, others):
     for candidate in (fold(base), fold(base + math.pi)):
         margin = min(joint_margin(block["x"], block["y"], SAFE_Z, candidate),
                      joint_margin(A[0], A[1], 0.06, candidate),
-                     joint_margin(B[0], B[1], 0.06, candidate))
+                     joint_margin(B[0], B[1], 0.06, candidate),
+                     joint_margin(C[0], C[1], 0.06, candidate))
         options.append((margin >= LIMIT_MARGIN_RAD,
                         round(camera_clearance(block, candidate, others), 3),
                         -abs(candidate), candidate, round(margin, 3)))
