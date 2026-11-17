@@ -337,6 +337,7 @@ def pose(x, y, z, quat):
 def pick(block, yaw):
     quat = down_quat(yaw)
     grasp_z = max(block["top"] - GRASP_OFFSET, TABLE_Z + 0.008)
+    turned = False
     open_gripper()
     if not must(move_to_pose(pose(block["x"], block["y"], SAFE_Z, quat),
                              max_steps=LONG_MOVE_STEPS), "hover"):
@@ -387,6 +388,18 @@ def pick(block, yaw):
                 sx, sy = float(seen.pose.position[0]), float(seen.pose.position[1])
                 attempt["moved_to"] = [round(sx, 4), round(sy, 4)]
                 x0, y0 = sx, sy
+            if along == 0.0 and across == 0.0 and not turned:
+                # A pad on the block with the hand centred over it means the
+                # fingers travel along its length and a pad meets its end
+                # (run 0209: the same contact at zero shift through five
+                # re-looks). Turn the fingers 90 degrees before shifting.
+                yaw = fold(yaw + math.pi / 2.0)
+                quat = down_quat(yaw)
+                axis = finger_axis(yaw)
+                turned = True
+                attempt["turned"] = True
+                queue = list(shifts)
+            else:
                 # The search starts over around where the block is now (run
                 # 0206: after a re-look only one shift remained, and it missed).
                 queue = [shift for shift in shifts if shift != (along, across)]
