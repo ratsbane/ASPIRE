@@ -46,11 +46,23 @@ class FakeState:
         self.O_F_ext_hat_K = [0.0, 0.0, fz, 0.0, 0.0, 0.0]
 
 
-class FakeContext:
-    """A panda_py control context that ticks a fixed number of times, instantly."""
+class FakeClock:
+    """A monotonic clock the fake control context advances by one tick per ok()."""
 
-    def __init__(self, ticks):
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+class FakeContext:
+    """A panda_py control context that ticks a fixed number of times, instantly
+    in wall time while advancing the fake clock by the control period."""
+
+    def __init__(self, ticks, clock=None):
         self.ticks = ticks
+        self.clock = clock
 
     def __enter__(self):
         return self
@@ -60,6 +72,8 @@ class FakeContext:
 
     def ok(self):
         self.ticks -= 1
+        if self.clock is not None:
+            self.clock.t += 0.01
         return self.ticks >= 0
 
 
@@ -83,7 +97,8 @@ class FakePanda:
     """Joint batches land exactly; under impedance control the hand follows the
     command until an optional surface stops it, pushing back at 300 N/m."""
 
-    def __init__(self):
+    def __init__(self, clock=None):
+        self.clock = clock if clock is not None else FakeClock()
         self.q = np.array(HOME)
         self.batches = []
         self.surface_z = None
@@ -160,7 +175,7 @@ class FakePanda:
         self.controller = None
 
     def create_context(self, frequency, max_runtime):
-        return FakeContext(int(frequency * max_runtime))
+        return FakeContext(int(frequency * max_runtime), self.clock)
 
     def move_to_joint_position(self, waypoints, speed_factor=0.1):
         self.batches.append((np.asarray(waypoints, dtype=np.float64), speed_factor))
@@ -200,6 +215,7 @@ def build(allow_motion: bool = True):
         camera=SyntheticCamera(),
         fk=fake_fk,
         impedance_controller=lambda: FakeImpedanceController(panda),
+        clock=panda.clock,
     )
     adapter = FrankaRealAdapter(env, allow_physical_motion=allow_motion)
     adapter.reset("stack_blocks", 0)
@@ -490,6 +506,7 @@ def test_episode_recorder_writes_arm_log_cameras_and_events(tmp_path):
         camera=SyntheticCamera(),
         fk=fake_fk,
         impedance_controller=lambda: FakeImpedanceController(panda),
+        clock=panda.clock,
     )
     adapter = FrankaRealAdapter(env, allow_physical_motion=True, run_observer=Observer())
     adapter.reset("stack_blocks", 0)  # starts the recorder

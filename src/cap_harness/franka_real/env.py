@@ -49,6 +49,21 @@ CONTACT_GUARD_TRAVEL_M = 0.018  # no verdict before the command has sunk this fa
 CONTACT_UNLOAD_TICKS = 30  # ease the command back up to the contact height
 CONTACT_MIN_DESCENT_M = 0.025  # the guard travel plus room to measure a rate
 CONTACT_MAX_SPEED_M_S = 0.05
+CONTACT_STIFFNESS = (1500.0, 1500.0, 600.0, 60.0, 60.0, 60.0)
+"""Cartesian impedance during a contact descent: [x, y, z] N/m, [rx, ry, rz] Nm/rad.
+
+z stays the soft axis: the press on contact is roughly K_z times the lag the
+hand carries when it arrives. Measured 2026-11-17: at 300 N/m the hand
+trails a 20 mm/s command by ~20 mm (joint friction), and with the plane held
+stiff it also sticks in free air for long enough to look stalled -- three
+false contacts 26 mm above the table at ~1 N. At 600 N/m a stick lasts about
+half as long, and the stall path below waits it out.
+"""
+CONTACT_STALL_SUSTAIN_TICKS = 30
+"""A stall must persist this long (0.3 s) to count; a force rise needs only
+CONTACT_SUSTAIN_TICKS. Free-air stick-slip at 600 N/m and 20 mm/s lasts
+~F_friction / (K_z * v) = 5 N / 12 N/s = 0.4 s at the most, usually less; a
+real stop lasts for ever."""
 CONTACT_SERIES_EVERY_TICKS = 5
 """Every fifth control tick is kept in the descent report (20 Hz)."""
 CONTACT_MAX_LAG_M = 0.035
@@ -76,8 +91,11 @@ class RealFrankaEnv:
         fk: Callable[[np.ndarray], np.ndarray],
         scene_camera: Optional[Camera] = None,
         impedance_controller: Optional[Callable[[], Any]] = None,
+        clock: Optional[Callable[[], float]] = None,
     ) -> None:
         self.config = config
+        self._clock = clock if clock is not None else time.monotonic
+        """Monotonic seconds; the contact descent integrates by it. Tests inject one."""
         self._panda = panda
         self._gripper = gripper
         self._camera = camera
@@ -363,7 +381,13 @@ class RealFrankaEnv:
                 f"floor {floor_z:.3f} m; start the descent higher"
             )
         controller = self._make_impedance_controller()
-        controller.set_impedance(np.diag([400.0, 400.0, 300.0, 30.0, 30.0, 30.0]))
+        # z is soft on purpose (the contact spring); x, y and the orientation
+        # are not. At 400 N/m the hand drifted ~13 mm toward the base during
+        # every 3 cm placement descent (runs 0007-0010, 2026-11-17: pre-place
+        # at x 0.500, hand at x 0.486-0.489 on contact), joint friction the
+        # lateral spring could not overcome, and the block went where the hand
+        # went. Stiffer in the plane, the same friction costs a few millimetres.
+        controller.set_impedance(np.diag(CONTACT_STIFFNESS))
         controller.set_nullspace_stiffness(1.0)
         # The controller commands in its own pose readout; the guard above
         # judged the floor by the same forward kinematics every waypoint gets.
@@ -379,18 +403,26 @@ class RealFrankaEnv:
         recent: list[float] = []
         settle = 0
         above = 0
+        stalled_for = 0
         unload_ticks = 0
         peak_rise = 0.0
         contact_z: Optional[float] = None
         stop = "timeout"
         command_floor = floor_z - CONTACT_MAX_LAG_M
         runtime = (tz - command_floor) / speed + 2.0
-        started = time.monotonic()
+        started = self._clock()
         # A downsampled record of the command, the hand and the force, so a
         # floor stop can be told apart from a trigger that failed to fire.
         series: list[list[float]] = []
         tick = 0
         fz = fz0
+        # The loop is paced by panda_py's context at 100 Hz, but a busy
+        # interpreter (the episode recorder's threads, live) slowed it to
+        # ~45 Hz. The command therefore sinks by wall-clock time, not by tick,
+        # and the stall window is a wall-clock window, so the descent speed
+        # and the trigger mean what they say at any achieved rate.
+        last_tick_t = started
+        recent_t: list[float] = []
         self.note_event("descend", floor_z=round(floor_z, 4), speed_m_s=speed, start_z=round(start_z, 4))
         self._panda.start_controller(controller)
         try:
@@ -398,10 +430,13 @@ class RealFrankaEnv:
                 frequency=int(round(1.0 / CONTACT_DT_S)), max_runtime=runtime
             ) as context:
                 while context.ok():
+                    now = self._clock()
+                    dt = min(max(now - last_tick_t, 0.0), 5 * CONTACT_DT_S)
+                    last_tick_t = now
                     actual = float(self._panda.get_position()[2])
                     if tick % CONTACT_SERIES_EVERY_TICKS == 0:
                         series.append(
-                            [round(tick * CONTACT_DT_S, 2), round(tz, 4), round(actual, 4), round(fz, 2)]
+                            [round(now - started, 2), round(tz, 4), round(actual, 4), round(fz, 2)]
                         )
                     tick += 1
                     if contact_z is not None:
@@ -414,7 +449,7 @@ class RealFrankaEnv:
                         if unload_ticks >= CONTACT_UNLOAD_TICKS:
                             break
                         continue
-                    tz = max(command_floor, tz - speed * CONTACT_DT_S)
+                    tz = max(command_floor, tz - speed * dt)
                     controller.set_control(np.array([x, y, tz]), orientation, q)
                     fz = float(self._panda.get_state().O_F_ext_hat_K[2])
                     if settle < CONTACT_BASELINE_END_TICKS:
@@ -425,18 +460,25 @@ class RealFrankaEnv:
                     if baseline:
                         fz0, baseline = float(np.mean(baseline)), []
                     recent.append(actual)
-                    if len(recent) > window:
+                    recent_t.append(now)
+                    while recent_t and now - recent_t[0] > CONTACT_VELOCITY_WINDOW_S + 1e-6:
                         recent.pop(0)
+                        recent_t.pop(0)
+                    span = now - recent_t[0]
                     descending = (
-                        (recent[0] - actual) / (CONTACT_DT_S * (len(recent) - 1))
-                        if len(recent) == window
+                        (recent[0] - actual) / span
+                        if len(recent) >= window and span > 0.0
                         else speed
                     )
                     rise = abs(fz - fz0)
                     peak_rise = max(peak_rise, rise)
                     stalled = descending < CONTACT_VELOCITY_FRACTION * speed
-                    above = above + 1 if (stalled or rise > force_limit) else 0
-                    if tz < guard_z and above >= CONTACT_SUSTAIN_TICKS:
+                    above = above + 1 if rise > force_limit else 0
+                    stalled_for = stalled_for + 1 if stalled else 0
+                    if tz < guard_z and (
+                        above >= CONTACT_SUSTAIN_TICKS
+                        or stalled_for >= CONTACT_STALL_SUSTAIN_TICKS
+                    ):
                         contact_z = actual
                         stop = "contact"
                         continue
@@ -477,7 +519,8 @@ class RealFrankaEnv:
             "lag_m": round(actual - tz, 4),
             "drift_xy_m": drift_xy,
             "speed_m_s": speed,
-            "elapsed_s": round(time.monotonic() - started, 3),
+            "elapsed_s": round(self._clock() - started, 3),
+            "tick_hz": round(tick / max(self._clock() - started, 1e-6), 1),
             "controller": "panda_py_cartesian_impedance",
             "series_columns": ["t_s", "command_z", "hand_z", "fz_n"],
             "series": series,
