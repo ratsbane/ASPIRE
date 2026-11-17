@@ -72,17 +72,42 @@ def survey(x, y):
                          "rpy_deg": [180.0, 0.0, 0.0]}, max_steps=LONG_MOVE_STEPS)
 
 
+def see_lying(near, radius):
+    """The best-scoring lying block of the colour within reach of `near`.
+
+    localize_object hands back the one best mask, which for "green block" is
+    the standing lime block as often as the row's green (run 0166 chased
+    it to the table's edge and the workspace guard said no). Standing blocks
+    are never carried: too tall for the camera, and not the task.
+    """
+    found = segment_text("wrist", COLOUR + " block")
+    if not found.ok:
+        return None
+    best = None
+    for seg in found.segmentations[:8]:
+        if float(seg.score) < 0.5:
+            continue
+        geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
+        px, py = float(geometry.pose.position[0]), float(geometry.pose.position[1])
+        extents = [float(v) for v in geometry.extents]
+        if max(extents) > 0.12 or extents[2] > 0.045:
+            continue  # merged blobs, or a block standing on end
+        if not (0.30 < px < 0.62 and -0.29 < py < 0.29):
+            continue  # beyond where the hand can work above it
+        if math.hypot(px - near[0], py - near[1]) > radius:
+            continue
+        if best is None or float(seg.score) > best[1]:
+            best = (geometry, float(seg.score))
+    return None if best is None else best[0]
+
+
 def find(near, radius=NEAR_M):
     if not must(survey(near[0], near[1]), "survey"):
         return None
-    found = localize_object(COLOUR + " block")
-    if not found.ok:
+    geometry = see_lying(near, radius)
+    if geometry is None:
         return None
-    px, py, pz = (float(v) for v in found.geometry.pose.position)
-    if not (0.25 < px < 0.66 and -0.33 < py < 0.33):
-        return None
-    if math.hypot(px - near[0], py - near[1]) > radius:
-        return None
+    px, py, pz = (float(v) for v in geometry.pose.position)
     if math.hypot(px - near[0], py - near[1]) > NADIR_M:
         # A block well off the survey's nadir reads worse (silhouette bleed,
         # and a loose camera's tilt costs more at the edge of the image):
@@ -91,15 +116,14 @@ def find(near, radius=NEAR_M):
         # table's edge).
         if not must(survey(px, py), "survey"):
             return None
-        again = localize_object(COLOUR + " block")
-        if again.ok:
-            qx, qy, qz = (float(v) for v in again.geometry.pose.position)
-            if math.hypot(qx - px, qy - py) < 0.06:
-                found, px, py, pz = again, qx, qy, qz
-    extents = [float(v) for v in found.geometry.extents]
+        again = see_lying([px, py], 0.06)
+        if again is not None:
+            geometry = again
+            px, py, pz = (float(v) for v in geometry.pose.position)
+    extents = [float(v) for v in geometry.extents]
     return {"x": px, "y": py, "top": pz + extents[2] / 2.0,
             "footprint": max(extents[0], extents[1]),
-            "geometry": found.geometry}
+            "geometry": geometry}
 
 
 def neighbours(block):
@@ -324,12 +348,11 @@ def pick(block, yaw):
             if not must(move_to_pose(pose(x, y, SAFE_Z, quat), max_steps=LONG_MOVE_STEPS),
                         "re_look"):
                 return None
-            seen = localize_object(COLOUR + " block")
-            if seen.ok:
-                sx, sy = float(seen.geometry.pose.position[0]), float(seen.geometry.pose.position[1])
-                if math.hypot(sx - x0, sy - y0) < 0.08:
-                    attempt["moved_to"] = [round(sx, 4), round(sy, 4)]
-                    x0, y0 = sx, sy
+            seen = see_lying([x0, y0], 0.08)
+            if seen is not None:
+                sx, sy = float(seen.pose.position[0]), float(seen.pose.position[1])
+                attempt["moved_to"] = [round(sx, 4), round(sy, 4)]
+                x0, y0 = sx, sy
             continue
         if reach.diagnostics["stop"] == "floor":
             set_gripper(0.25)
