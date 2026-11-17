@@ -949,6 +949,7 @@ def test_clutter_example_programs_pass_the_sandbox_validator():
         "stack_blocks/observe.py",
         "stack_blocks/touch_table.py",
         "stack_blocks/round_trip.py",
+        "stack_blocks/cross_check.py",
     ):
         source = (examples / relative).read_text()
         _ProgramValidator().visit(ast.parse(source))  # raises on a violation
