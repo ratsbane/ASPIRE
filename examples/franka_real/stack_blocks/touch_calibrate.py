@@ -45,7 +45,8 @@ COLOURS = ["blue", "green", "red"]
 LOOKS = [[0.49, 0.0], [0.45, -0.15], [0.50, 0.10]]
 WORK_X = (0.32, 0.60)   # where the probe grid can reach and the block is not at an edge
 WORK_Y = (-0.28, 0.12)  # the basket stands beyond y 0.12
-STANDING_TOP_M = 0.06   # a block on end: the probe floor would have to sit a hand-body below its top
+STANDING_TOP_M = 0.06   # a block on end (top ~0.072): probed with the floor just below its top
+STANDING_FLOOR_BELOW_TOP_M = 0.025  # a miss beside a standing block stops here, the body still clear of it
 
 FAILED_MOVE = {"stage": None, "error": None}
 
@@ -142,7 +143,7 @@ def centroid(points):
 
 
 def lying_blocks_in_view():
-    """Every lying block of any colour the camera sees from here, best first."""
+    """Every block of any colour the camera sees from here: lying ones first, then standing, best first."""
     out = []
     for colour in COLOURS:
         found = segment_text("wrist", colour + " block")
@@ -155,13 +156,16 @@ def lying_blocks_in_view():
             px, py, pz = (float(v) for v in geometry.pose.position)
             extents = [float(v) for v in geometry.extents]
             top = pz + extents[2] / 2.0
-            if max(extents) > 0.12 or top > STANDING_TOP_M:
+            if max(extents) > 0.12:
                 continue
             if not (WORK_X[0] < px < WORK_X[1] and WORK_Y[0] < py < WORK_Y[1]):
                 continue
+            standing = top > STANDING_TOP_M
             out.append((float(seg.score), colour,
-                        {"x": px, "y": py, "top": top, "extents": extents}))
-    out.sort(key=lambda item: -item[0])
+                        {"x": px, "y": py, "top": top, "extents": extents, "standing": standing}))
+    # Lying blocks first: a standing one is probed with its floor just below
+    # its top, so its grid says less about the eye than a lying one's.
+    out.sort(key=lambda item: (item[2]["standing"], -item[0]))
     return out
 
 
@@ -199,11 +203,18 @@ for target in targets:
     if seen is None:
         entry["status"] = "not_seen"
         continue
-    top_est = 0.028 + TABLE_Z
-    # The floor for a miss is the table. (A standing block would need the
-    # floor a hand-body's height below its top, or the body sweeps it while
-    # the pads go down beside it; see BODY_BELOW_PADS_M.)
-    floor_z = BARE_HAND_TABLE_Z - 0.008
+    standing = bool(seen["top"] > STANDING_TOP_M)
+    entry["standing"] = standing
+    if standing:
+        # A block on end: a miss beside it must stop well above the table,
+        # or the hand body (BODY_BELOW_PADS_M above the pads) sweeps it over
+        # while the pads go down. The floor sits just below its top; a hit
+        # is a contact above that floor with the force rise, as for a lying one.
+        top_est = seen["top"]
+        floor_z = seen["top"] - STANDING_FLOOR_BELOW_TOP_M
+    else:
+        top_est = 0.028 + TABLE_Z
+        floor_z = BARE_HAND_TABLE_Z - 0.008  # the floor for a miss is the table
     close_gripper()
     hits, probes, ok = grid_hits(seen["x"], seen["y"], COARSE_PITCH_M, COARSE_HALF, top_est, floor_z)
     entry["coarse_probes"] = probes
