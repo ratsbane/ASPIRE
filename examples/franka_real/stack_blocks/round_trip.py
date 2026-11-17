@@ -336,6 +336,7 @@ def place(block, grasp, slot):
             "released_at": [round(truth[0], 4), round(truth[1], 4)]}
 
 
+go_home()  # start from home: a run can begin wherever the last one left the arm (run 0121)
 legs = []
 origin = FIRST_LOOKS[0]
 rehome = False

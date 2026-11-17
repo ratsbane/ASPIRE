@@ -19,6 +19,7 @@ def read(colour, camera):
     return {"position": position, "extents": extents}
 
 
+go_home()  # start from home: a run can begin wherever the last one left the arm (run 0121)
 readings = []
 for sx, sy in SURVEYS:
     moved = move_to_pose({"position": [sx, sy, SURVEY_Z], "frame": "base",

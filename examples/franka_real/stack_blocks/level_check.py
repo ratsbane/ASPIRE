@@ -6,6 +6,7 @@
 SURVEY_Z = 0.33
 LONG_MOVE_STEPS = 600
 
+go_home()  # start from home: a run can begin wherever the last one left the arm (run 0121)
 readings = []
 for sx, sy in ([0.50, 0.0], [0.45, -0.12]):
     moved = move_to_pose({"position": [sx, sy, SURVEY_Z], "frame": "base",

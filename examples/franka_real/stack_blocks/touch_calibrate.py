@@ -132,6 +132,7 @@ def centroid(points):
     return [sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points)]
 
 
+go_home()  # start from home: a run can begin wherever the last one left the arm (run 0121)
 measurements = []
 for target in TARGETS:
     entry = {"name": target["name"]}
