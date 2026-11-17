@@ -166,21 +166,42 @@ def camera_clearance(block, yaw, others):
     return nearest
 
 
+JOINT_LOWER = [-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973]
+JOINT_UPPER = [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973]
+LIMIT_MARGIN_RAD = 0.3
+
+
+def joint_margin(x, y, z, yaw):
+    """How far the IK solution for this hand pose stays from every joint limit."""
+    ik = solve_ik(Pose([x, y, z], down_quat(yaw), "base"))
+    if not ik.ok:
+        return -1.0
+    q = [float(v) for v in ik.joint_positions]
+    return min(min(q[i] - JOINT_LOWER[i], JOINT_UPPER[i] - q[i]) for i in range(7))
+
+
 def grasp_yaw(block, others):
-    """Fingers across the block's 28 mm width, with the camera on the clear side.
+    """Fingers across the block's 28 mm width, by a yaw the arm can hold.
 
     The gripper is symmetric, so yaw and yaw + 180 are the same grasp for
-    the fingers but not for the camera, which swings to the other side of
-    the hand. Of the two, take the one whose camera footprint is farther
-    from every other block; the shorter wrist turn breaks a tie.
+    the fingers but not for the arm or the camera. Of the two: a yaw whose
+    IK at the pick hover or at either place spot winds a joint to within
+    0.3 rad of its limit is out (run 0129: the base joint at -2.88 rad,
+    one degree from its stop, and the motion generator stalled on the
+    pre-place); then the camera footprint farther from every other block;
+    then the shorter wrist turn.
     """
     base = box_yaw(block["geometry"])  # the long axis; fingers travel at yaw - 90, across the width
     options = []
     for candidate in (fold(base), fold(base + math.pi)):
-        options.append((round(camera_clearance(block, candidate, others), 3),
-                        -abs(candidate), candidate))
+        margin = min(joint_margin(block["x"], block["y"], SAFE_Z, candidate),
+                     joint_margin(A[0], A[1], 0.06, candidate),
+                     joint_margin(B[0], B[1], 0.06, candidate))
+        options.append((margin >= LIMIT_MARGIN_RAD,
+                        round(camera_clearance(block, candidate, others), 3),
+                        -abs(candidate), candidate, round(margin, 3)))
     options.sort(reverse=True)
-    return options[0][2], options[0][0]
+    return options[0][3], options[0][1], options[0][4]
 
 
 def finger_clear(block, yaw, others):
@@ -210,8 +231,10 @@ def choose_yaw(block, others):
     and a 55 mm block the margin is 12 mm a side, inside the localization
     error -- which, it turned out, is the grasp every run before 0106 made.
     """
-    yaw, camera_room = grasp_yaw(block, others)
+    yaw, camera_room, margin = grasp_yaw(block, others)
     blocked_by = finger_clear(block, yaw, others)
+    if blocked_by is None and margin < LIMIT_MARGIN_RAD:
+        blocked_by = ["joints", margin]
     if blocked_by is None and camera_room < CAMERA_CLEAR_M:
         blocked_by = ["camera", round(camera_room, 3)]
     return yaw, blocked_by
