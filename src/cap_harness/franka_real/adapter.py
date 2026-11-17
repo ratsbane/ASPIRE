@@ -59,6 +59,16 @@ HAND_EYE_ALPHA = 0.5
 HAND_EYE_DRIFT_M = 0.02
 """A residual beyond this is reported as drift: re-probe before trusting a look."""
 HAND_EYE_HISTORY = 100
+PLANE_STRIDE = 8
+"""Depth pixels are subsampled this much for the table-plane fit (~4.8k points)."""
+PLANE_MIN_INLIERS = 0.35
+"""Fraction of valid depth that must lie on the fitted plane for it to be the table."""
+PLANE_MAX_TILT_DEG = 40.0
+"""A fitted tilt beyond this is not a bracket, it is the wrong plane: ignore it."""
+PLANE_MIN_HEIGHT_M = 0.15
+"""Level against the table only when the camera is at least this high above it."""
+PLANE_TOLERANCES_M = (0.03, 0.015, 0.008)
+"""Inlier bands for the successive plane refits."""
 
 
 class FrankaRealAdapter:
@@ -91,6 +101,72 @@ class FrankaRealAdapter:
         )
         self._wrist_correction = self._load_wrist_correction()
         """The eye's running correction; see :meth:`report_hand_eye_residual`."""
+        self._last_level: tuple[np.ndarray, float] | None = None
+        """The last table-levelling rotation and height shift, reused when a
+        look is too low to contain the table."""
+        self.last_level_report: dict[str, Any] = {"leveled": False}
+
+    # -- the eye levels itself against the table ---------------------------
+
+    def _level_to_table(self, frame: Any, camera_matrix: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+        """Rotate the camera pose until the table in its depth image is horizontal.
+
+        The bracket tilts (2026-11-17: ~15 degrees, which put a block on the
+        table 9 cm sideways and 6 cm up), and a tilt cannot be absorbed by a
+        translation. But every look from a survey height contains the table,
+        and the table is horizontal: fit the dominant plane in the depth
+        image, rotate the camera pose about its own origin until that plane's
+        normal is vertical, then shift it so the plane sits at the configured
+        table height. A look too low to contain the table reuses the last
+        levelling. The report says what was done.
+        """
+        table_z = float(getattr(self._env.config, "table_plane_z", 0.017))
+        height = float(camera_matrix[2, 3]) - table_z
+        report: dict[str, Any] = {"leveled": False, "camera_height_m": round(height, 3)}
+        depth = getattr(frame, "depth_m", None)
+        intrinsics = getattr(frame, "intrinsics", None)
+        if height >= PLANE_MIN_HEIGHT_M and depth is not None and intrinsics is not None:
+            fit = _fit_table_plane(np.asarray(depth, dtype=np.float64), np.asarray(intrinsics), camera_matrix)
+            if fit is not None:
+                normal, point, inliers = fit
+                tilt = float(np.degrees(np.arccos(np.clip(normal[2], -1.0, 1.0))))
+                below = float(camera_matrix[2, 3] - point[2])
+                report.update(
+                    {
+                        "tilt_deg": round(tilt, 2),
+                        "plane_inliers": round(inliers, 3),
+                        "plane_below_camera_m": round(below, 3),
+                    }
+                )
+                if (
+                    inliers >= PLANE_MIN_INLIERS
+                    and tilt <= PLANE_MAX_TILT_DEG
+                    and below >= PLANE_MIN_HEIGHT_M
+                ):
+                    rotation = _rotation_taking(normal, np.array([0.0, 0.0, 1.0]))
+                    origin = camera_matrix[:3, 3]
+                    levelled_point = rotation @ (point - origin) + origin
+                    self._last_level = (rotation, table_z - float(levelled_point[2]))
+                    report["leveled"] = True
+                    report["reused"] = False
+                else:
+                    report["reason"] = "not the table"
+            else:
+                report["reason"] = "too little depth"
+        else:
+            report["reason"] = "too low" if height < PLANE_MIN_HEIGHT_M else "no depth"
+        if self._last_level is None:
+            return camera_matrix, report
+        rotation, dz = self._last_level
+        if not report["leveled"]:
+            report["reused"] = True
+        origin = camera_matrix[:3, 3].copy()
+        levelled = camera_matrix.copy()
+        levelled[:3, :3] = rotation @ camera_matrix[:3, :3]
+        levelled[:3, 3] = origin  # rotated about the camera's own origin
+        levelled[2, 3] += dz
+        report["height_shift_m"] = round(dz, 4)
+        return levelled, report
 
     # -- the eye's running correction --------------------------------------
 
@@ -354,8 +430,10 @@ class FrankaRealAdapter:
         # world coordinates. Setting both to the base frame silently skips the
         # transform and hands back camera-frame points labelled "base".
         camera_matrix = ee @ self._hand_eye
-        # The eye's running correction: a base-frame shift of the camera pose
-        # moves every back-projected point by the same amount.
+        # First level the eye against the table it can see, then apply the
+        # running correction learned from the hand: a base-frame shift of the
+        # camera pose moves every back-projected point by the same amount.
+        camera_matrix, self.last_level_report = self._level_to_table(frame, camera_matrix)
         camera_matrix[:3, 3] += self.wrist_correction_xyz
         camera_pose = matrix_to_pose(camera_matrix, frame=BASE_FRAME)
         camera = CameraObservation(
@@ -697,11 +775,95 @@ class FrankaRealAdapter:
             "motions_executed": self._env.motions_executed,
             "wrist_correction_xyz": list(self._wrist_correction["offset_xyz"]),
             "wrist_correction_samples": int(self._wrist_correction.get("samples", 0)),
+            "wrist_level": dict(self.last_level_report),
         }
 
     def close(self) -> None:
         self.finish_episode_recording()
         self._env.close()
+
+
+def _fit_table_plane(
+    depth: np.ndarray, intrinsics: np.ndarray, camera_matrix: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, float] | None:
+    """The dominant plane of a depth image in the base frame.
+
+    Returns (unit normal with positive z, a point on the plane, inlier
+    fraction), or None when there is too little depth. Successive least-squares
+    refits with tightening inlier bands: the table is most of a survey look,
+    so the first fit lands near it and the bands shed the blocks and the
+    basket.
+    """
+    if depth.ndim != 2 or intrinsics.shape != (3, 3):
+        return None
+    # ~60 rows of samples whatever the resolution: stride 8 at 480 lines.
+    stride = max(1, int(round(min(depth.shape) / (480.0 / PLANE_STRIDE))))
+    sub = depth[::stride, ::stride]
+    rows, cols = np.mgrid[0 : sub.shape[0], 0 : sub.shape[1]]
+    u = cols.astype(np.float64) * stride
+    v = rows.astype(np.float64) * stride
+    valid = np.isfinite(sub) & (sub > 0.1) & (sub < 1.5)
+    if int(valid.sum()) < 200:
+        return None
+    d = sub[valid]
+    fx, fy = float(intrinsics[0, 0]), float(intrinsics[1, 1])
+    cx, cy = float(intrinsics[0, 2]), float(intrinsics[1, 2])
+    camera_points = np.stack([(u[valid] - cx) / fx * d, (v[valid] - cy) / fy * d, d], axis=1)
+    # No BLAS below this line, on purpose: a matrix product here deadlocked
+    # against the episode recorder's threads (OpenBLAS and Python threads,
+    # the old story), and this runs inside every look on the live arm.
+    rotation = camera_matrix[:3, :3]
+    points = np.einsum("ij,nj->ni", rotation, camera_points) + camera_matrix[:3, 3]
+    selected = points
+    normal = np.array([0.0, 0.0, 1.0])
+    centroid = points.mean(axis=0)
+    for tolerance in PLANE_TOLERANCES_M:
+        centroid = selected.mean(axis=0)
+        normal = _smallest_axis(selected - centroid)
+        if normal[2] < 0:
+            normal = -normal
+        distance = np.abs(np.einsum("nj,j->n", points - centroid, normal))
+        inside = distance < tolerance
+        if int(inside.sum()) < 50:
+            return None
+        selected = points[inside]
+    return normal, centroid, float(selected.shape[0]) / float(points.shape[0])
+
+
+def _smallest_axis(centred: np.ndarray) -> np.ndarray:
+    """Unit direction of least variance of centred (N, 3) points, BLAS-free.
+
+    The 3x3 covariance by elementwise sums, then power iteration on
+    (trace * I - C), whose dominant eigenvector is C's least.
+    """
+    covariance = np.einsum("ni,nj->ij", centred, centred) / max(centred.shape[0], 1)
+    shifted = np.trace(covariance) * np.eye(3) - covariance
+    vector = np.array([0.0, 0.0, 1.0])
+    for _ in range(60):
+        candidate = np.einsum("ij,j->i", shifted, vector)
+        norm = float(np.linalg.norm(candidate))
+        if norm < 1e-12:
+            break
+        candidate = candidate / norm
+        if float(np.abs(candidate @ vector)) > 1.0 - 1e-12:
+            vector = candidate
+            break
+        vector = candidate
+    return vector / float(np.linalg.norm(vector))
+
+
+def _rotation_taking(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+    """The smallest rotation matrix taking unit vector ``source`` onto ``target``."""
+    s = np.asarray(source, dtype=np.float64) / np.linalg.norm(source)
+    t = np.asarray(target, dtype=np.float64) / np.linalg.norm(target)
+    axis = np.cross(s, t)
+    sine = float(np.linalg.norm(axis))
+    cosine = float(np.clip(s @ t, -1.0, 1.0))
+    if sine < 1e-9:
+        return np.eye(3) if cosine > 0 else -np.eye(3)
+    axis = axis / sine
+    k = np.array([[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]])
+    return np.eye(3) + sine * k + (1.0 - cosine) * (k @ k)
 
 
 __all__ = ["ARM", "EMBODIMENT", "FrankaRealAdapter"]

@@ -106,6 +106,11 @@ class FrankaStationConfig:
 
     station: str = "franka-bench"
     robot_host: str = "192.168.0.253"
+    table_plane_z: float = 0.017
+    """Height of the table surface in the base frame. The wrist camera levels
+    itself against the table in every look (see the adapter): a tilted bracket
+    shows up as a tilted table plane in the depth image, and the camera pose is
+    rotated until the plane is horizontal at this height."""
     camera: FrankaCameraConfig = field(default_factory=FrankaCameraConfig)
     scene_camera: FrankaSceneCameraConfig | None = None
     workspace: FrankaWorkspace = field(default_factory=FrankaWorkspace)

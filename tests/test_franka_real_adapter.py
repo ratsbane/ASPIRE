@@ -580,6 +580,59 @@ def test_reported_residuals_teach_the_eye_and_persist(tmp_path):
         adapter.report_hand_eye_residual([0.4], [0.4, 0.0])
 
 
+def _tilted_camera_config(tilt_deg: float) -> FrankaStationConfig:
+    """A station whose wrist camera is mounted ``tilt_deg`` off about its x axis."""
+    from cap_harness.franka_real.config import FrankaCameraConfig
+    from cap_harness.geometry import matrix_to_quaternion_wxyz, quaternion_wxyz_to_matrix
+
+    def about_x(degrees):
+        angle = np.deg2rad(degrees)
+        return np.array(
+            [[1.0, 0.0, 0.0], [0.0, np.cos(angle), -np.sin(angle)], [0.0, np.sin(angle), np.cos(angle)]]
+        )
+
+    # The fake hand at home points its z up, where the real one points down;
+    # flip the mount so the synthetic plane lies below the camera like a table.
+    nominal = quaternion_wxyz_to_matrix(FrankaCameraConfig().hand_eye_quaternion_wxyz)
+    quaternion = tuple(
+        float(v) for v in matrix_to_quaternion_wxyz(nominal @ about_x(180.0) @ about_x(tilt_deg))
+    )
+    return FrankaStationConfig(camera=FrankaCameraConfig(hand_eye_quaternion_wxyz=quaternion))
+
+
+def test_the_eye_levels_itself_against_the_table():
+    # The synthetic camera sees a plane perpendicular to its optical axis. With
+    # the camera mounted 12 degrees off, that plane reads as a 12-degree slope
+    # unless the adapter levels it; afterwards it is horizontal at table height.
+    for tilt in (0.0, 12.0):
+        panda = FakePanda()
+        env = RealFrankaEnv(
+            _tilted_camera_config(tilt),
+            panda=panda,
+            gripper=FakeGripper(),
+            camera=SyntheticCamera(),
+            fk=fake_fk,
+            impedance_controller=lambda: FakeImpedanceController(panda),
+            clock=panda.clock,
+        )
+        adapter = FrankaRealAdapter(env, allow_physical_motion=False)
+        adapter.reset("stack_blocks", 0)
+        observation = adapter.get_observation()
+        report = adapter.last_level_report
+        assert report["leveled"] is True, report
+        assert abs(report["tilt_deg"] - tilt) < 0.5, report
+        # The levelled optical axis points straight down.
+        from cap_harness.geometry import pose_to_matrix
+
+        camera = pose_to_matrix(observation.cameras["wrist"].camera_pose)
+        optical_axis = camera[:3, :3] @ np.array([0.0, 0.0, 1.0])
+        assert optical_axis[2] < -0.9999, optical_axis
+        # And the synthetic plane, 0.75 m down the axis, sits at the table height.
+        plane_z = camera[2, 3] + 0.75 * optical_axis[2]
+        assert abs(plane_z - env.config.table_plane_z) < 0.002, plane_z
+        assert adapter.get_controller_metadata()["wrist_level"]["leveled"] is True
+
+
 def test_contact_descent_is_guarded_like_a_waypoint():
     env, adapter = build()
     below_box = adapter.descend_to_contact(floor_z=0.0)
