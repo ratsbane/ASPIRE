@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
+import time
+
 import numpy as np
 
 from cap_harness.contracts import (
@@ -78,6 +80,11 @@ TRAJECTORY_START_TOLERANCE_RAD = 0.02
 #: independently along the trajectory's own gripper column. This bound only
 #: catches a gripper that has changed enough to alter the collision geometry.
 TRAJECTORY_START_GRIPPER_TOLERANCE = 0.25
+
+
+DEPTH_FRAME_RETRIES = 3
+"""Fresh frames tried when a mask back-projects to no valid depth."""
+DEPTH_FRAME_RETRY_S = 0.15
 
 
 class CapApi:
@@ -259,13 +266,29 @@ class CapApi:
         camera_name: str,
         target_frame: str = "robot_base",
     ) -> PointCloud:
-        observation = self.get_observation(camera_name)
-        return self._project_mask(
-            mask,
-            camera_name=camera_name,
-            target_frame=target_frame,
-            observation=observation,
-        )
+        # The mask came from an earlier frame; the depth is taken fresh. A
+        # live depth camera drops the odd frame (the D405 over a strained USB
+        # link, 2026-11-17: a mask with plenty of depth under it one frame
+        # earlier back-projected to nothing and the run died, 0305), so a
+        # frame with no valid depth under the mask is tried again before it
+        # is refused.
+        last_error: ValueError | None = None
+        for _ in range(DEPTH_FRAME_RETRIES):
+            observation = self.get_observation(camera_name)
+            try:
+                return self._project_mask(
+                    mask,
+                    camera_name=camera_name,
+                    target_frame=target_frame,
+                    observation=observation,
+                )
+            except ValueError as exc:
+                if "valid positive depth" not in str(exc):
+                    raise
+                last_error = exc
+                time.sleep(DEPTH_FRAME_RETRY_S)
+        assert last_error is not None
+        raise last_error
 
     def _project_mask(
         self,
