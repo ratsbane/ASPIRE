@@ -14,6 +14,7 @@ BLOCK_LONG_M = 0.055
 BLOCK_FLAT_M = 0.028
 PRE_PLACE_ABOVE_M = 0.03
 FLOOR_BELOW_M = 0.015
+NEAR_FLOOR_M = 0.008   # a contact this close above the grasp floor is the table under the pads, not the block
 CARRY_Z = 0.22
 SAFE_Z = 0.14
 SURVEY_Z = 0.33
@@ -395,10 +396,22 @@ def pick(block, yaw):
         reach = franka_real.descend_to_contact(floor_z=grasp_z)
         if not must(reach, "descend"):
             return None
-        attempt = {"along": along, "across": across, "stop": reach.diagnostics["stop"],
-                   "z": reach.diagnostics["contact_z"]}
+        stop = reach.diagnostics["stop"]
+        contact_z = reach.diagnostics["contact_z"]
+        if stop == "contact" and contact_z is not None and contact_z - grasp_z < NEAR_FLOOR_M:
+            # The pads met the table a few millimetres above the floor: the
+            # front of the table stands ~5 mm higher than the row (measured
+            # 2026-11-17), and at the spare spot D the lying-block floor sat
+            # 2 mm below where the pads touch, so every descent stopped on
+            # "contact" and each retry shoved the block (run 0300). The pads
+            # straddle the block at this height all the same: close.
+            stop = "floor"
+            attempt_stop = "floor_by_contact"
+        else:
+            attempt_stop = stop
+        attempt = {"along": along, "across": across, "stop": attempt_stop, "z": contact_z}
         attempts.append(attempt)
-        if reach.diagnostics["stop"] == "contact":
+        if stop == "contact":
             # A pad on the block pushes it (Doug watched it, run 0125: the
             # block moved and the shifted retries closed on empty air). Look
             # again from the hover height before searching any further, and
@@ -427,7 +440,7 @@ def pick(block, yaw):
                 # 0206: after a re-look only one shift remained, and it missed).
                 queue = [shift for shift in shifts if shift != (along, across)]
             continue
-        if reach.diagnostics["stop"] == "floor":
+        if stop == "floor":
             set_gripper(0.25)
             held = float(get_robot_state().gripper_positions["primary"])
             attempt["held"] = round(held, 3)
