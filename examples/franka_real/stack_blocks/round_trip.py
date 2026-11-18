@@ -24,6 +24,8 @@ NADIR_M = 0.04   # farther than this from the survey spot, look again from above
 VERIFY_M = 0.03
 VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block as read
 DROPPED_M = 0.05      # seen farther than this from the release point: it left the jaws, not an eye error
+RELOOK_TRUST_M = 0.015  # a hover re-look that moves the block farther than this from the survey's reading,
+                        # and then a pad still lands on it, is distrusted (run 0315: 3 cm, twelve times)
 HELD_MIN = 0.08        # gripper fraction below which the close met air
 HELD_SQUARE = 0.30     # narrower than this on a 28 mm block (~0.36): the pads are on a corner
 LENGTHWISE_HELD = 0.55  # a 28 mm block holds at ~0.36; across its 56 mm length at ~0.74
@@ -364,6 +366,7 @@ def pick(block, yaw):
     turned = False
     recentred = False
     relooked = False
+    trust_relook = True
     open_gripper()
     if not must(move_to_pose(pose(block["x"], block["y"], SAFE_Z, quat),
                              max_steps=LONG_MOVE_STEPS), "hover"):
@@ -423,7 +426,7 @@ def pick(block, yaw):
             if not must(move_to_pose(pose(x, y, SAFE_Z, quat), max_steps=LONG_MOVE_STEPS),
                         "re_look"):
                 return None
-            seen = see_lying([x0, y0], 0.08)
+            seen = see_lying([x0, y0], 0.08) if trust_relook else None
             if seen is not None:
                 sx, sy = float(seen.pose.position[0]), float(seen.pose.position[1])
                 attempt["moved_to"] = [round(sx, 4), round(sy, 4)]
@@ -438,6 +441,18 @@ def pick(block, yaw):
                 axis = finger_axis(yaw)
                 turned = True
                 attempt["turned"] = True
+                queue = list(shifts)
+            elif (along == 0.0 and across == 0.0 and trust_relook
+                  and math.hypot(x0 - block["x"], y0 - block["y"]) > RELOOK_TRUST_M):
+                # The fingers are turned, the hand is centred where the
+                # re-look from the hover put the block, and a pad is on it
+                # again: that look is not telling the truth (run 0315: the
+                # hover read the blue 3 cm from the survey's reading, and
+                # twelve descents on its spot all met a block). The survey
+                # saw it well enough for a pad to find it; search from there.
+                trust_relook = False
+                x0, y0 = block["x"], block["y"]
+                attempt["reverted_to_survey"] = True
                 queue = list(shifts)
             else:
                 # The search starts over around where the block is now (run
