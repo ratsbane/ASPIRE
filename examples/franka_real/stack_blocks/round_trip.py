@@ -92,6 +92,15 @@ def has_depth(seg, depth):
     return int((covered > 0.1).sum()) >= 50
 
 
+def is_standing(top, footprint):
+    """On end (top ~0.072, ~28 mm square) or lying (top ~0.045, its length showing)."""
+    if top > 0.06:
+        return True
+    if top < 0.05:
+        return False
+    return footprint < 0.045
+
+
 def see_lying(near, radius):
     """The best-scoring lying block of the colour within reach of `near`.
 
@@ -116,7 +125,10 @@ def see_lying(near, radius):
             continue  # merged blobs
         # A block on end tops at ~0.072 and shows a ~28 mm square footprint;
         # lying it tops at ~0.045 (bleed can read 0.05) and shows its length.
-        standing = top > 0.06 or max(extents[0], extents[1]) < 0.045
+        # A shrunken mask of a lying block reads a small footprint too (run
+        # 0291: the fingers then closed 1 cm above it, eleven times), so the
+        # footprint only decides when the top is between the two heights.
+        standing = is_standing(top, max(extents[0], extents[1]))
         if not (0.30 < px < 0.62 and -0.31 < py < BASKET_Y):
             continue  # beyond where the hand can work above it (the box is 0.33; a lift at 0.334 was refused),
             # or in the basket (run 0219 reached for a blue block seen standing in it)
@@ -156,7 +168,7 @@ def find(near, radius=NEAR_M):
     extents = [float(v) for v in geometry.extents]
     return {"x": px, "y": py, "top": pz + extents[2] / 2.0,
             "footprint": max(extents[0], extents[1]),
-            "standing": pz + extents[2] / 2.0 > 0.06 or max(extents[0], extents[1]) < 0.045,
+            "standing": is_standing(pz + extents[2] / 2.0, max(extents[0], extents[1])),
             "geometry": geometry}
 
 
