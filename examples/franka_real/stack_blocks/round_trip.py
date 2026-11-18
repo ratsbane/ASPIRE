@@ -24,6 +24,7 @@ VERIFY_M = 0.03
 VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block as read
 DROPPED_M = 0.05      # seen farther than this from the release point: it left the jaws, not an eye error
 HELD_MIN = 0.08        # gripper fraction below which the close met air
+HELD_SQUARE = 0.30     # narrower than this on a 28 mm block (~0.36): the pads are on a corner
 LENGTHWISE_HELD = 0.55  # a 28 mm block holds at ~0.36; across its 56 mm length at ~0.74
 FINGER_HALF_OPEN_M = 0.040   # the fingers descend open: 80 mm between pads
 MAX_APPROACHES = 12          # grasp attempts per pick, re-looks included
@@ -357,6 +358,7 @@ def pick(block, yaw):
     quat = down_quat(yaw)
     grasp_z = max(block["top"] - GRASP_OFFSET, TABLE_Z + 0.008)
     turned = False
+    recentred = False
     open_gripper()
     if not must(move_to_pose(pose(block["x"], block["y"], SAFE_Z, quat),
                              max_steps=LONG_MOVE_STEPS), "hover"):
@@ -445,6 +447,23 @@ def pick(block, yaw):
                 axis = finger_axis(yaw)
                 turned = True
                 x0, y0 = x, y
+                queue = list(shifts)
+                continue
+            if HELD_MIN <= held < HELD_SQUARE and not recentred:
+                # The pads closed on a corner or an edge, not across the
+                # block (run 0297: a 17 mm hold on a 28 mm block slipped out
+                # before the carry). Open, look again from above to recentre,
+                # and search again from there, once.
+                attempt["corner"] = True
+                recentred = True
+                open_gripper()
+                if not must(move_to_pose(pose(x, y, SAFE_Z, quat), max_steps=LONG_MOVE_STEPS),
+                            "re_look"):
+                    return None
+                seen = see_lying([x0, y0], 0.08)
+                if seen is not None:
+                    x0, y0 = float(seen.pose.position[0]), float(seen.pose.position[1])
+                    attempt["moved_to"] = [round(x0, 4), round(y0, 4)]
                 queue = list(shifts)
                 continue
             if held >= HELD_MIN:
