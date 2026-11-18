@@ -360,6 +360,7 @@ def pick(block, yaw):
     grasp_z = max(block["top"] - GRASP_OFFSET, TABLE_Z + 0.008)
     turned = False
     recentred = False
+    relooked = False
     open_gripper()
     if not must(move_to_pose(pose(block["x"], block["y"], SAFE_Z, quat),
                              max_steps=LONG_MOVE_STEPS), "hover"):
@@ -483,6 +484,29 @@ def pick(block, yaw):
                 block["x"], block["y"] = x, y  # where the fingers actually hold it
                 break
             open_gripper()
+            if along == 0.0 and across == 0.0 and not relooked:
+                # Air at the hand's first, centred close: the survey from
+                # 33 cm up had the block somewhere else (run 0303: a block
+                # on end read as lying, the fingers closing 3 cm beside it,
+                # eleven times). Look again from the hover, straight above,
+                # where the top face is unmistakable, and search from there.
+                relooked = True
+                attempt["relooked"] = True
+                if not must(move_to_pose(pose(x, y, SAFE_Z, quat), max_steps=LONG_MOVE_STEPS),
+                            "re_look"):
+                    return None
+                seen = see_lying([x0, y0], 0.10)
+                if seen is not None:
+                    x0, y0 = float(seen.pose.position[0]), float(seen.pose.position[1])
+                    ext = [float(v) for v in seen.extents]
+                    top = float(seen.pose.position[2]) + ext[2] / 2.0
+                    attempt["moved_to"] = [round(x0, 4), round(y0, 4), round(top, 4)]
+                    if is_standing(top, max(ext[0], ext[1])) and not block.get("standing"):
+                        block["standing"] = True
+                        block["top"] = top
+                        grasp_z = max(top - GRASP_OFFSET, TABLE_Z + 0.008)
+                queue = list(shifts)
+                continue
         if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
                                  max_steps=LONG_MOVE_STEPS), "re_approach"):
             return None
