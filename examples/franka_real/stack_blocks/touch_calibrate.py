@@ -43,7 +43,9 @@ TARGETS = [
 # whichever lying blocks the looks find, named by colour.
 COLOURS = ["blue", "green", "red"]
 LOOKS = [[0.49, 0.0], [0.45, -0.15], [0.50, 0.10]]
-WORK_X = (0.32, 0.60)   # where the probe grid can reach and the block is not at an edge
+WORK_X = (0.32, 0.56)   # a target here keeps the whole probe grid (2 rings of 2 cm) short of x 0.60
+PROBE_X_MAX = 0.60      # no probe beyond this: the front edge is near (calibration 0306 pushed the
+                        # green block off the table from x 0.605, and the arm found an empty table)
 WORK_Y = (-0.28, 0.12)  # the basket stands beyond y 0.12
 STANDING_TOP_M = 0.06   # a block on end (top ~0.072): probed with the floor just below its top
 STANDING_FLOOR_BELOW_TOP_M = 0.025  # a miss beside a standing block stops here, the body still clear of it
@@ -136,7 +138,7 @@ def grid_hits(cx, cy, pitch, half, top_est, floor_z):
             ring = max(abs(i), abs(j))
             ring_hits = 0
         x, y = cx + i * pitch, cy + j * pitch
-        if not (PROBE_X_MIN < x < 0.64 and -0.31 < y < 0.31):
+        if not (PROBE_X_MIN < x < PROBE_X_MAX and -0.31 < y < 0.31):
             # Outside the probe box counts as unreachable: a grid cut
             # by the box leans the centroid like one cut by reach.
             probes.append([round(x, 4), round(y, 4), None, False])
