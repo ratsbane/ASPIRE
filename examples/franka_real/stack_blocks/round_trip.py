@@ -24,6 +24,7 @@ VERIFY_M = 0.03
 VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block as read
 DROPPED_M = 0.05      # seen farther than this from the release point: it left the jaws, not an eye error
 HELD_MIN = 0.08        # gripper fraction below which the close met air
+LENGTHWISE_HELD = 0.55  # a 28 mm block holds at ~0.36; across its 56 mm length at ~0.74
 FINGER_HALF_OPEN_M = 0.040   # the fingers descend open: 80 mm between pads
 MAX_APPROACHES = 12          # grasp attempts per pick, re-looks included
 CAMERA_OFFSET = (-0.0595, -0.0087)  # the wrist camera's origin from the TCP, in the hand's x, y
@@ -416,6 +417,24 @@ def pick(block, yaw):
             set_gripper(0.25)
             held = float(get_robot_state().gripper_positions["primary"])
             attempt["held"] = round(held, 3)
+            if held >= LENGTHWISE_HELD and not turned and not block.get("standing"):
+                # The pads closed on the block's 56 mm length, not its 28 mm
+                # width: a bleed-inflated mask had the axes the wrong way
+                # round. That grip has 12 mm of margin and let go on the
+                # carry (run 0286). The gripper reading is the tell: open,
+                # turn the fingers 90 degrees, and grasp again.
+                attempt["lengthwise"] = True
+                open_gripper()
+                if not must(move_to_pose(pose(x, y, grasp_z + PRE_PLACE_ABOVE_M, quat),
+                                         max_steps=LONG_MOVE_STEPS), "re_approach"):
+                    return None
+                yaw = fold(yaw + math.pi / 2.0)
+                quat = down_quat(yaw)
+                axis = finger_axis(yaw)
+                turned = True
+                x0, y0 = x, y
+                queue = list(shifts)
+                continue
             if held >= HELD_MIN:
                 block["x"], block["y"] = x, y  # where the fingers actually hold it
                 break
