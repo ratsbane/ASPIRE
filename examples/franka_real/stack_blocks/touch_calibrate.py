@@ -114,27 +114,45 @@ def probe(x, y, top_est, floor_z):
 
 
 def grid_hits(cx, cy, pitch, half, top_est, floor_z):
+    """Probe the grid from the centre outward, ring by ring.
+
+    A sweep from one side shoved the block ahead of the pads (calibration
+    0292: hits 6 cm wide across a 28 mm block, the centroid a cell toward
+    +x, and the eye then overshot every pick by that much). Centre first,
+    the pads land on the block's top where they cannot push it, and the
+    edge probes that can come last; a ring with no hit after a ring with
+    some ends the grid.
+    """
     hits = []
     probes = []
-    for i in range(-half, half + 1):
-        for j in range(-half, half + 1):
-            x, y = cx + i * pitch, cy + j * pitch
-            if not (PROBE_X_MIN < x < 0.64 and -0.31 < y < 0.31):
-                # Outside the probe box counts as unreachable: a grid cut
-                # by the box leans the centroid like one cut by reach.
-                probes.append([round(x, 4), round(y, 4), None, False])
-                continue
-            felt = probe(x, y, top_est, floor_z)
-            if felt is None:
-                return hits, probes, False
-            if felt == "unreachable":
-                probes.append([round(x, 4), round(y, 4), None, False])
-                continue
-            z, pushed = felt
-            hit = pushed and z > BARE_HAND_TABLE_Z + HIT_ABOVE_TABLE_M and z > floor_z + 0.004
-            probes.append([round(x, 4), round(y, 4), round(z, 4), hit])
-            if hit:
-                hits.append((x, y))
+    cells = [(i, j) for i in range(-half, half + 1) for j in range(-half, half + 1)]
+    cells.sort(key=lambda c: (max(abs(c[0]), abs(c[1])), abs(c[0]) + abs(c[1])))
+    ring_hits = 0
+    ring = 0
+    for i, j in cells:
+        if max(abs(i), abs(j)) != ring:
+            if hits and ring_hits == 0:
+                break  # the block does not reach this ring; farther probes only shove
+            ring = max(abs(i), abs(j))
+            ring_hits = 0
+        x, y = cx + i * pitch, cy + j * pitch
+        if not (PROBE_X_MIN < x < 0.64 and -0.31 < y < 0.31):
+            # Outside the probe box counts as unreachable: a grid cut
+            # by the box leans the centroid like one cut by reach.
+            probes.append([round(x, 4), round(y, 4), None, False])
+            continue
+        felt = probe(x, y, top_est, floor_z)
+        if felt is None:
+            return hits, probes, False
+        if felt == "unreachable":
+            probes.append([round(x, 4), round(y, 4), None, False])
+            continue
+        z, pushed = felt
+        hit = pushed and z > BARE_HAND_TABLE_Z + HIT_ABOVE_TABLE_M and z > floor_z + 0.004
+        probes.append([round(x, 4), round(y, 4), round(z, 4), hit])
+        if hit:
+            hits.append((x, y))
+            ring_hits += 1
     return hits, probes, True
 
 
