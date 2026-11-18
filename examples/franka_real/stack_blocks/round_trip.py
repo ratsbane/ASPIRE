@@ -142,7 +142,10 @@ def see_lying(near, radius):
         # once slipped from the jaws and landed on end mid-table, run 0189,
         # and the lying-only rule then called it lost). The fingers close
         # across its 28 mm at mid-height; the camera clears its top by 3 cm.
-        rank = (0 if standing else 1, float(seg.score))
+        # Then the one nearest `near`, not the best-scoring: with two green
+        # blocks on the table the verify look at the placed one chose the
+        # other, 15 cm away, and called the placement a drop (run 0313).
+        rank = (0 if standing else 1, -math.hypot(px - near[0], py - near[1]))
         if best is None or rank > best[1]:
             best = (geometry, rank)
     return None if best is None else best[0]
@@ -663,7 +666,7 @@ for trip in range(ROUND_TRIPS):
             leg["status"] = "move_failed"
             break
         leg.update(placed)
-        # The verify looks wide: there is one blue block, the hand just put it
+        # The verify looks wide: the hand just put the block
         # here, and an untaught eye (new bracket, run 0085) can read it 10 cm
         # off -- which is exactly the residual the verify exists to report.
         after = find(target, VERIFY_LOOK_M)
