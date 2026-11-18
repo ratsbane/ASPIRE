@@ -53,6 +53,8 @@ B = [0.53 + JITTER_M * ((SEED // 27) % 3 - 1), -0.15 + JITTER_M * ((SEED // 3) %
 C = [0.57, -0.07]     # the spare spots, when A or B has a block in it: the front of the table
 D = [0.57, 0.06]      # (the old (0.42, -0.12) had no IK for the retreat or the survey, run 0155;
 E = [0.48, -0.22]     # with three colours in play two spares were not enough, run 0159;
+F = [0.47, -0.10]     # with four blocks (two greens) C and D full ruled out A and B by
+G = [0.47, 0.08]      # clearance and E held the block itself, run 0321: the table's middle
                       # at x 0.60 the grasp search's shifts reached x 0.627 with the fingers open
                       # and twice pushed the red block off the front edge, runs 0221 and 0224)
 PICK_X_MAX = 0.60     # no grasp attempt is centred beyond this: the front edge is near
@@ -643,7 +645,7 @@ for trip in range(ROUND_TRIPS):
         if seen is None:
             leg["status"] = "move_failed"
             break
-        for spot in (target, B if target == A else A, C, D, E):
+        for spot in (target, B if target == A else A, C, D, E, F, G):
             if math.hypot(spot[0] - block["x"], spot[1] - block["y"]) < TARGET_CLEAR_M:
                 continue
             if spot_clear(spot, seen):
@@ -746,7 +748,7 @@ verified = sum(1 for leg in legs if leg["status"] == "verified")
 result = {
     "ok": FAILED_MOVE["stage"] is None and verified == 2 * ROUND_TRIPS,
     "colour": COLOUR,
-    "spots": {"A": A, "B": B, "C": C, "D": D, "E": E},
+    "spots": {"A": A, "B": B, "C": C, "D": D, "E": E, "F": F, "G": G},
     "verified": verified,
     "of": 2 * ROUND_TRIPS,
     "legs": legs,
