@@ -29,9 +29,9 @@ TABLE_X = (0.30, 0.62)
 TABLE_Y = (-0.31, 0.20)
 HAND_X = (0.34, 0.56)    # where a push may end: the front edge took two blocks (runs 0221, 0224)
 HAND_Y = (-0.26, 0.18)   # the table runs to about 0.20 on the positive side (the basket is gone)
-START_X = (0.32, 0.64)   # where a push may start: in the clear, out past the table's front edge (nothing
-START_Y = (-0.28, 0.19)  # to drop; the box ends at 0.66). Run 0347: a clump at x 0.55 had no room either way
-                         # inside the end box.
+START_X = (0.32, 0.66)   # where a push may start: in the clear, out past the table's front edge (nothing
+START_Y = (-0.28, 0.19)  # to drop; the box ends at 0.66, and a green at x 0.593 needs 0.655). Run 0347: a
+                         # clump at x 0.55 had no room either way inside the end box.
 BAND_X = (0.40, 0.56)    # where a block can be probed and picked: nearer the base the hand cannot get
 BAND_Y = (-0.26, 0.15)   # down (calibration 0358: 20 of 25 probes at x 0.30-0.36 refused); beyond 0.56
                          # the front edge is near. A stray outside the band is swept in; one with no
