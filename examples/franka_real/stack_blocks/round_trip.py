@@ -59,6 +59,7 @@ G = [0.47, 0.08]      # clearance and E held the block itself, run 0321: the tab
                       # at x 0.60 the grasp search's shifts reached x 0.627 with the fingers open
                       # and twice pushed the red block off the front edge, runs 0221 and 0224)
 PICK_X_MAX = 0.60     # no grasp attempt is centred beyond this: the front edge is near
+REACH_X_MIN = 0.38    # nearer the base the hand cannot get down to the table (calibration 0358)
 TARGET_CLEAR_M = 0.07  # another block this close to a spot makes it unusable
 REHOME_M = 0.08   # found farther than this from A: the first carry takes it home
 ROUND_TRIPS = 3
@@ -144,9 +145,11 @@ def see_lying(near, radius):
         # 0291: the fingers then closed 1 cm above it, eleven times), so the
         # footprint only decides when the top is between the two heights.
         standing = is_standing(top, max(extents[0], extents[1]))
-        if not (0.30 < px < 0.62 and -0.31 < py < BASKET_Y):
+        if not (REACH_X_MIN < px < 0.62 and -0.31 < py < BASKET_Y):
             continue  # beyond where the hand can work above it (the box is 0.33; a lift at 0.334 was refused),
-            # or in the basket (run 0219 reached for a blue block seen standing in it)
+            # nearer the base than the hand can get down (calibration 0358: probes at x 0.30-0.36
+            # refused, the red marooned at 0.34), or in the basket (run 0219 reached for a blue
+            # block seen standing in it)
         if standing and abs(py) > 0.27:
             continue  # a standing block at the table's edge is the lime's corner, not the task (run 0166)
         if math.hypot(px - near[0], py - near[1]) > radius:

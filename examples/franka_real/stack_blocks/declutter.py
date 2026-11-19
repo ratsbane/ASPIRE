@@ -29,8 +29,13 @@ TABLE_X = (0.30, 0.62)
 TABLE_Y = (-0.31, 0.20)
 HAND_X = (0.34, 0.56)    # where a push may end: the front edge took two blocks (runs 0221, 0224)
 HAND_Y = (-0.26, 0.18)   # the table runs to about 0.20 on the positive side (the basket is gone)
-START_X = (0.32, 0.62)   # where a push may start: in the clear, out to the table's edge (nothing to drop)
-START_Y = (-0.28, 0.19)  # (run 0347: a clump at x 0.55 had no room either way inside the end box)
+START_X = (0.32, 0.64)   # where a push may start: in the clear, out past the table's front edge (nothing
+START_Y = (-0.28, 0.19)  # to drop; the box ends at 0.66). Run 0347: a clump at x 0.55 had no room either way
+                         # inside the end box.
+BAND_X = (0.40, 0.56)    # where a block can be probed and picked: nearer the base the hand cannot get
+BAND_Y = (-0.26, 0.15)   # down (calibration 0358: 20 of 25 probes at x 0.30-0.36 refused); beyond 0.56
+                         # the front edge is near. A stray outside the band is swept in; one with no
+                         # room behind it (the base side) is marooned and reported.
 DOWN = [0.0, 1.0, 0.0, 0.0]
 
 FAILED_MOVE = {"stage": None, "error": None}
@@ -185,6 +190,45 @@ def plan_sweep(group, along_axis=False):
     return None if best is None else best[1]
 
 
+def plan_bring_in(block):
+    """A sweep that brings a stray block into the working band, toward the
+    table's middle. None for a block already in the band; a plan marked
+    marooned when there is no room behind the block for the start."""
+    dx, dy = 0.0, 0.0
+    if block["x"] > BAND_X[1]:
+        dx = -1.0
+    elif block["x"] < BAND_X[0]:
+        dx = 1.0
+    if block["y"] > BAND_Y[1]:
+        dy = -1.0
+    elif block["y"] < BAND_Y[0]:
+        dy = 1.0
+    if dx == 0.0 and dy == 0.0:
+        return None
+    norm = math.hypot(dx, dy)
+    dx, dy = dx / norm, dy / norm
+    reach = BLOCK_LONG_M / 2.0
+    plan = {"stray": [block["colour"], block["x"], block["y"]],
+            "direction": [round(dx, 3), round(dy, 3)], "members": 1, "along_axis": False}
+    start = [block["x"] - dx * (reach + APPROACH_GAP), block["y"] - dy * (reach + APPROACH_GAP)]
+    if margin(start[0], start[1], START_X, START_Y) < 0.0:
+        plan["marooned"] = True
+        return plan
+    beyond = PUSH_BEYOND
+    for step in range(20):
+        if margin(block["x"] + dx * beyond, block["y"] + dy * beyond) >= 0.0:
+            break
+        beyond -= 0.005
+    if beyond < MIN_SWEEP:
+        plan["marooned"] = True
+        return plan
+    plan["start"] = [round(v, 4) for v in start]
+    plan["end"] = [round(block["x"] + dx * beyond, 4), round(block["y"] + dy * beyond, 4)]
+    plan["centre"] = [block["x"], block["y"]]
+    plan["reach"] = round(reach, 4)
+    return plan
+
+
 def sweep(plan):
     sx, sy = plan["start"]
     ex, ey = plan["end"]
@@ -203,30 +247,50 @@ go_home()
 before = scan(LOOK)
 blocks = before
 sweeps = []
+marooned = []
 stage = None
 while blocks is not None and len(sweeps) < MAX_SWEEPS and FAILED_MOVE["stage"] is None:
     groups = clumps(blocks)
-    if not groups:
-        break
-    # The clump as seen from straight above it: off the survey's nadir a
-    # block reads worse, and the sweep's start must be in the clear.
-    group = groups[0]
-    cx = sum(b["x"] for b in group) / len(group)
-    cy = sum(b["y"] for b in group) / len(group)
-    near = scan([clamp(cx, 0.36, 0.56), clamp(cy, -0.24, 0.12)])
-    if near is None:
-        break
-    groups = clumps([b for b in near if math.hypot(b["x"] - cx, b["y"] - cy) < 0.14])
-    if not groups:
+    if groups:
+        # The clump as seen from straight above it: off the survey's nadir a
+        # block reads worse, and the sweep's start must be in the clear.
+        group = groups[0]
+        cx = sum(b["x"] for b in group) / len(group)
+        cy = sum(b["y"] for b in group) / len(group)
+        near = scan([clamp(cx, 0.36, 0.56), clamp(cy, -0.24, 0.12)])
+        if near is None:
+            break
+        groups = clumps([b for b in near if math.hypot(b["x"] - cx, b["y"] - cy) < 0.14])
+        if not groups:
+            blocks = scan(LOOK)
+            continue
+        plan = plan_sweep(groups[0])
+        if plan is None:
+            stage = "no room to sweep"
+            sweeps.append({"ok": False, "no_room_for": [[b["colour"], b["x"], b["y"]] for b in groups[0]]})
+            break
+        plan["ok"] = sweep(plan)
+        sweeps.append(plan)
         blocks = scan(LOOK)
         continue
-    plan = plan_sweep(groups[0])
-    if plan is None:
-        stage = "no room to sweep"
-        sweeps.append({"ok": False, "no_room_for": [[b["colour"], b["x"], b["y"]] for b in groups[0]]})
+    # No clump: a stray outside the working band is swept in, one a pass.
+    stray = None
+    for b in blocks:
+        if any(m[0] == b["colour"] and math.hypot(m[1] - b["x"], m[2] - b["y"]) < 0.03
+               for m in marooned):
+            continue
+        plan = plan_bring_in(b)
+        if plan is None:
+            continue
+        if plan.get("marooned"):
+            marooned.append(plan["stray"])
+            continue
+        stray = plan
         break
-    plan["ok"] = sweep(plan)
-    sweeps.append(plan)
+    if stray is None:
+        break
+    stray["ok"] = sweep(stray)
+    sweeps.append(stray)
     blocks = scan(LOOK)
 
 open_gripper()
@@ -245,5 +309,7 @@ result = {"ok": after is not None and FAILED_MOVE["stage"] is None and not remai
           "before": before,
           "after": after,
           "remaining": None if remaining is None else [[b["colour"] for b in g] for g in remaining],
+          "marooned": marooned,
+          "strays": None if after is None else [b["colour"] for b in after if plan_bring_in(b) is not None],
           "leaning": None if after is None else [b["colour"] for b in after if leaning(b)],
           "move_failures": FAILED_MOVE}

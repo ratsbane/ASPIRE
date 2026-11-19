@@ -43,7 +43,9 @@ TARGETS = [
 # whichever lying blocks the looks find, named by colour.
 COLOURS = ["blue", "green", "red"]
 LOOKS = [[0.49, 0.0], [0.45, -0.15], [0.50, 0.10]]
-WORK_X = (0.32, 0.56)   # a target here keeps the whole probe grid (2 rings of 2 cm) short of x 0.60
+WORK_X = (0.42, 0.56)   # a target here keeps the whole probe grid (2 rings of 2 cm) short of x 0.60
+                        # and clear of the base side, where the hand cannot get down (0358: 20 of 25
+                        # probes on a red at x 0.34 refused, every cell at x 0.36 and nearer)
 PROBE_X_MAX = 0.60      # no probe beyond this: the front edge is near (calibration 0306 pushed the
                         # green block off the table from x 0.605, and the arm found an empty table)
 WORK_Y = (-0.28, 0.12)  # the basket stands beyond y 0.12
