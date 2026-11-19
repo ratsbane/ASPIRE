@@ -50,6 +50,7 @@ CONTACT_UNLOAD_TICKS = 30  # ease the command back up to the contact height
 CONTACT_MIN_DESCENT_M = 0.025  # the guard travel plus room to measure a rate
 CONTACT_MAX_SPEED_M_S = 0.05
 REFLEX_RETRY_PAUSE_S = 0.5  # after a reflex: recover, settle, send the batch once more
+REFLEX_RETRIES = 2          # how many times a batch is resent after reflexes before it is a failure
 REFLEX_JOIN_PAUSE_S = 1.5   # after a reflex ends a controller: let its recovery log before the join
 CONTACT_STIFFNESS = (1500.0, 1500.0, 600.0, 60.0, 60.0, 60.0)
 """Cartesian impedance during a contact descent: [x, y, z] N/m, [rx, ry, rz] Nm/rad.
@@ -320,17 +321,22 @@ class RealFrankaEnv:
         )
         self.motions_executed += 1
         self.note_event("waypoints_done", converged=converged)
-        if not converged:
+        retries = 0
+        while not converged and retries < REFLEX_RETRIES:
             # A reflex aborts the motion and the generator reports
             # non-convergence. The communication reflex is transient (2026-11-19:
-            # seven in a day on an idle-clean link, each recovered by the
-            # robot within a second, each one costing a run), so recover once
-            # and send the same batch again; a second failure is the caller's.
+            # a dozen in a day on an idle-clean link, each recovered by the
+            # robot within a second, each one costing a run), so recover and
+            # send the same batch again, twice if need be (run 0431: two in a
+            # row on one hover); a failure after that is the caller's.
+            retries += 1
             recover = getattr(self._panda, "recover", None)
             if callable(recover):
                 recover()
             time.sleep(REFLEX_RETRY_PAUSE_S)
-            self.note_event("waypoints_retry", target_q=[round(float(v), 5) for v in sent[-1]])
+            self.note_event(
+                "waypoints_retry", target_q=[round(float(v), 5) for v in sent[-1]], attempt=retries
+            )
             converged = bool(
                 self._panda.move_to_joint_position([row for row in sent], speed_factor=factor)
             )
