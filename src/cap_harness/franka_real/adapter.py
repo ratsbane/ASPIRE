@@ -66,6 +66,7 @@ program's 0.12, since nobody has yet watched this policy move the arm."""
 POLICY_MAX_STEPS = 100
 """The longest chunk a program may ask the policy host to execute at once."""
 POLICY_GRIPPER_DEADBAND_M = 0.005
+DESCENT_REFLEX_RETRIES = 2  # a contact descent is resent this many times after reflexes
 """A chunk's final gripper width closer than this to the measured one is left alone."""
 HAND_EYE_ALPHA = 0.15
 """Weight of one placement residual in the eye's running correction. At 0.5
@@ -786,25 +787,30 @@ class FrankaRealAdapter:
             )
 
         try:
-            try:
-                report = descend()
-            except Exception as exc:  # libfranka reflexes, network, limits
-                # A reflex mid-descent is transient (2026-11-19: the communication
-                # reflex aborted probes and placements alike, and the robot
-                # recovers within a second): recover and descend once more from
-                # wherever the hand stopped. Anything else, or a second abort,
-                # is reported as before.
-                text = str(exc).lower()
-                if isinstance(exc, ValueError) or not any(
-                    word in text for word in ("reflex", "aborted", "communication")
-                ):
-                    raise
-                recover = getattr(self._env, "recover_from_reflex", None)
-                if not callable(recover):
-                    raise
-                recover()
-                report = descend(retry=True)
-                report["retried_after_reflex"] = True
+            attempts = 0
+            while True:
+                try:
+                    report = descend(retry=attempts > 0)
+                    if attempts:
+                        report["retried_after_reflex"] = attempts
+                    break
+                except Exception as exc:  # libfranka reflexes, network, limits
+                    # A reflex mid-descent is transient (2026-11-19: the
+                    # communication reflex aborted probes and placements
+                    # alike, and the robot recovers within a second): recover
+                    # and descend again from wherever the hand stopped, up to
+                    # DESCENT_REFLEX_RETRIES times (calibration 0434: two in a
+                    # row on one probe). Anything else is reported as before.
+                    text = str(exc).lower()
+                    if isinstance(exc, ValueError) or not any(
+                        word in text for word in ("reflex", "aborted", "communication")
+                    ):
+                        raise
+                    recover = getattr(self._env, "recover_from_reflex", None)
+                    if not callable(recover) or attempts >= DESCENT_REFLEX_RETRIES:
+                        raise
+                    attempts += 1
+                    recover()
         except ValueError as exc:
             return ExecutionResult(
                 ok=False,
