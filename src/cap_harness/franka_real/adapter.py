@@ -21,6 +21,7 @@ protocol's conservative ``False``.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import time
 from typing import Any, Mapping, Optional
@@ -87,6 +88,8 @@ PLANE_TOLERANCES_M = (0.03, 0.015, 0.008)
 PLANE_RANSAC_TRIALS = 120
 """Three-point samples tried for the seed plane before the refits."""
 PLANE_MAX_JUMP_DEG = 8.0
+WRIST_LEVEL_ENV = "CAP_HARNESS_WRIST_LEVEL"
+"""Set to 0 to look with the camera pose as calibrated: no plane fit, nothing reused."""
 """A fitted tilt this far from the last accepted one is a wrong plane, not the mount moving."""
 
 
@@ -147,6 +150,13 @@ class FrankaRealAdapter:
         table_z = float(getattr(self._env.config, "table_plane_z", 0.017))
         height = float(camera_matrix[2, 3]) - table_z
         report: dict[str, Any] = {"leveled": False, "camera_height_m": round(height, 3)}
+        if os.environ.get(WRIST_LEVEL_ENV, "1") in ("0", "off", "no"):
+            # The experiment's control: the camera pose as calibrated, no plane
+            # fit, no reuse of an earlier one (2026-11-19: the placement
+            # residuals were 1 cm on looks that leveled afresh and 2-4 cm on
+            # looks that reused a levelling, and the fit failed on most looks).
+            report["reason"] = "disabled"
+            return camera_matrix, report
         depth = getattr(frame, "depth_m", None)
         intrinsics = getattr(frame, "intrinsics", None)
         if height >= PLANE_MIN_HEIGHT_M and depth is not None and intrinsics is not None:
