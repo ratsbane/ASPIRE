@@ -48,7 +48,9 @@ WORK_X = (0.42, 0.56)   # a target here keeps the whole probe grid (2 rings of 2
                         # probes on a red at x 0.34 refused, every cell at x 0.36 and nearer)
 PROBE_X_MAX = 0.60      # no probe beyond this: the front edge is near (calibration 0306 pushed the
                         # green block off the table from x 0.605, and the arm found an empty table)
-WORK_Y = (-0.28, 0.12)  # the basket stands beyond y 0.12
+WORK_Y = (-0.26, 0.12)  # the basket stands beyond y 0.12; the grid's outer ring (4 cm) must stay
+                        # inside the table's far edge at -0.31 (0368: a blue at -0.289 had probes
+                        # at -0.329 refused, and a move abort on top)
 STANDING_TOP_M = 0.06   # a block on end (top ~0.072): probed with the floor just below its top
 STANDING_FLOOR_BELOW_TOP_M = 0.025  # a miss beside a standing block stops here, the body still clear of it
 
