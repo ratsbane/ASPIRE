@@ -592,14 +592,43 @@ def spot_clear(spot, seen):
     return True
 
 
+WOUND_RAD = 1.5  # the base joint this far from forward: the arm has wound into another branch
+
+
+def wound():
+    """Whether the arm has wound round: turned grasps add up, the solver keeps
+    the solution nearest the seed, and once the base joint is past 90 degrees
+    every joint-space path swings the hand wide. Run 0355: base at -137
+    degrees before a pick; the descent to the pre-place pose planned through
+    y -0.33, z 0.59, and the guard refused it with the block in hand."""
+    q = get_robot_state().joint_positions["primary"]
+    return abs(float(q[0])) > WOUND_RAD
+
+
+def moved_or_unwound(target_pose, unwound):
+    """A guarded move; refused for its path, once, it goes home first (the
+    block stays in the jaws) and tries again from the canonical branch."""
+    moved = move_to_pose(target_pose, max_steps=LONG_MOVE_STEPS)
+    if moved.ok or unwound[0]:
+        return moved
+    if "workspace guard" not in str(moved.error.message):
+        return moved
+    go_home()
+    unwound[0] = True
+    return move_to_pose(target_pose, max_steps=LONG_MOVE_STEPS)
+
+
 def place(block, grasp, slot):
     expect_z = contact_ee_z(block)
     quat = grasp["quat"]
-    if not must(move_to_pose(pose(slot[0], slot[1], CARRY_Z, quat),
-                             max_steps=LONG_MOVE_STEPS), "carry"):
+    unwound = [False]
+    if wound():
+        go_home()  # with the block held: home is above the table, nothing in the way
+        unwound[0] = True
+    if not must(moved_or_unwound(pose(slot[0], slot[1], CARRY_Z, quat), unwound), "carry"):
         return None
-    if not must(move_to_pose(pose(slot[0], slot[1], expect_z + PRE_PLACE_ABOVE_M, quat),
-                             max_steps=LONG_MOVE_STEPS), "pre_place"):
+    if not must(moved_or_unwound(pose(slot[0], slot[1], expect_z + PRE_PLACE_ABOVE_M, quat),
+                                 unwound), "pre_place"):
         return None
     touch = franka_real.descend_to_contact(floor_z=max(expect_z - FLOOR_BELOW_M, 0.004))
     must(touch, "lower")
@@ -613,6 +642,7 @@ def place(block, grasp, slot):
          "retreat")
     open_gripper()
     return {"expected_z": round(expect_z, 4),
+            "unwound": unwound[0],
             "contact": bool(touch.ok and report.get("contact")),
             "contact_z": report.get("contact_z"),
             "stop": report.get("stop"),
