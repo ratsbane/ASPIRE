@@ -1592,6 +1592,7 @@ class CapApi:
             ("get_controller_metadata", "metadata"),
             ("descend_to_contact", "execution"),
             ("report_hand_eye_residual", "perception"),
+            ("policy_chunk", "execution"),
             ("get_base_pose", "metadata"),
             ("navigate_to_pose", "execution"),
             ("move_torso", "execution"),

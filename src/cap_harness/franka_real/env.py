@@ -137,6 +137,14 @@ class RealFrankaEnv:
             "ee_transform": self.fk_matrix(q),
         }
 
+    def external_wrench(self) -> np.ndarray:
+        """The estimated external wrench at the hand in the base frame (6), zeros if unexposed."""
+        state = self._panda.get_state()
+        wrench = getattr(state, "O_F_ext_hat_K", None)
+        if wrench is None:
+            return np.zeros(6, dtype=np.float64)
+        return np.asarray(wrench, dtype=np.float64).reshape(6)
+
     def read_gripper_width(self, *, wait: bool = True) -> Optional[float]:
         """Measured finger opening, or None when a command holds the gripper and ``wait`` is off."""
         if not self._gripper_lock.acquire(blocking=wait):

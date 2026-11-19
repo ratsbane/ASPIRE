@@ -479,6 +479,7 @@ def test_extension_tools_register_under_the_approved_prefix():
     assert "franka_real.get_controller_metadata" in names
     assert "franka_real.descend_to_contact" in names
     assert "franka_real.report_hand_eye_residual" in names
+    assert "franka_real.policy_chunk" in names
     assert "move_to_pose" in names
 
 
@@ -1258,3 +1259,117 @@ def test_observation_carries_both_cameras_when_the_station_has_two():
     assert not np.allclose(
         scene.camera_pose.position, observation.cameras["wrist"].camera_pose.position
     )
+
+
+class FakePolicyHost:
+    """A policy host that answers with a fixed chunk and remembers what it was asked."""
+
+    def __init__(self, chunk):
+        self.chunk = chunk
+        self.requests = []
+        self.resets = []
+
+    def act(self, request):
+        self.requests.append(request)
+        return [list(row) for row in self.chunk]
+
+    def reset(self, policy):
+        self.resets.append(policy)
+
+
+def policy_chunk_toward(target_q, width_m, length=100):
+    """A chunk that ramps the joints from home to ``target_q`` and ends at ``width_m``."""
+    rows = []
+    for index in range(length):
+        fraction = (index + 1) / length
+        q = HOME + fraction * (np.asarray(target_q) - HOME)
+        rows.append(list(q) + [width_m])
+    return rows
+
+
+def build_with_policy(chunk, allow_motion=True):
+    panda = FakePanda()
+    env = RealFrankaEnv(
+        FrankaStationConfig(),
+        panda=panda,
+        gripper=FakeGripper(),
+        camera=SyntheticCamera(),
+        fk=fake_fk,
+        impedance_controller=lambda: FakeImpedanceController(panda),
+        clock=panda.clock,
+    )
+    host = FakePolicyHost(chunk)
+    adapter = FrankaRealAdapter(env, allow_physical_motion=allow_motion, policy_client=host)
+    adapter.reset("stack_blocks", 0)
+    return env, adapter, host
+
+
+def test_policy_chunk_sends_the_observation_and_executes_the_guarded_chunk():
+    """The policy host gets what the dataset converter wrote -- joints plus
+    gripper width, the hand's position, the wrench, the camera images -- and
+    its chunk's first steps go through the same waypoint path as a program's,
+    with the chunk's final gripper width applied after the motion."""
+    target = HOME + np.array([0.2, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0])
+    env, adapter, host = build_with_policy(policy_chunk_toward(target, 0.03))
+    env._panda.batches.clear()
+    result = adapter.policy_chunk(policy="dream-test", steps=5)
+    assert result.ok, result.error
+    assert result.steps_executed == 5
+    assert host.resets == ["dream-test"]
+    request = host.requests[-1]
+    assert len(request["state"]) == 8 and abs(request["state"][7] - 0.08) < 1e-9
+    assert len(request["ee_position"]) == 3 and len(request["force"]) == 6
+    assert set(request["images"]) == {"wrist"}
+    assert request["images"]["wrist"].startswith("iVBOR")  # a PNG, base64
+    batch, speed = env._panda.batches[-1]
+    # A straight ramp decimates to its ends; the last row is the fifth step.
+    assert batch.shape[1] == ARM_DOF and abs(speed - 0.10) < 1e-9
+    assert np.allclose(batch[-1], HOME + 0.05 * (target - HOME))
+    assert abs(env._gripper.width - 0.03) < 1e-9
+    assert result.diagnostics["gripper_moved"] is True
+    assert result.diagnostics["chunk_size"] == 100
+    assert [e for e in env.events if e["kind"] == "policy_chunk"][-1]["policy"] == "dream-test"
+    # A second chunk does not reset the host again, and leaves a gripper
+    # already at the chunk's width alone.
+    again = adapter.policy_chunk(policy="dream-test", steps=5)
+    assert again.ok and host.resets == ["dream-test"]
+    assert again.diagnostics["gripper_moved"] is False
+
+
+def test_policy_chunk_is_refused_by_the_workspace_guard_before_anything_moves():
+    """A chunk whose waypoints leave the box never reaches the plant: the
+    policy proposes, the bench's bounds dispose."""
+    far = HOME + np.array([9.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    chunk = [list(far) + [0.08]] * 100  # every row of the chunk is out of bounds
+    env, adapter, host = build_with_policy(chunk)
+    env._panda.batches.clear()
+    result = adapter.policy_chunk(steps=10)
+    assert not result.ok
+    assert result.error.code == ErrorCode.SAFETY_INTERLOCK
+    assert result.error.recoverable is True
+    assert env._panda.batches == []
+    assert np.allclose(env._panda.q, HOME)
+
+
+def test_policy_chunk_needs_motion_authorization_and_a_live_host():
+    env, adapter, host = build_with_policy(policy_chunk_toward(HOME, 0.08), allow_motion=False)
+    denied = adapter.policy_chunk(steps=10)
+    assert not denied.ok and denied.error.code == ErrorCode.SAFETY_INTERLOCK
+    assert host.requests == []
+
+    class DeadHost:
+        def act(self, request):
+            raise ConnectionError("connection refused")
+
+        def reset(self, policy):
+            pass
+
+    env, adapter, _ = build_with_policy([])
+    adapter._policy_client = DeadHost()
+    env._panda.batches.clear()
+    dead = adapter.policy_chunk(steps=10)
+    assert not dead.ok and dead.error.code == ErrorCode.EXECUTION_FAILED
+    assert "connection refused" in dead.error.message
+    assert env._panda.batches == []
+    bad = adapter.policy_chunk(steps=0)
+    assert not bad.ok and bad.error.code == ErrorCode.INVALID_REQUEST

@@ -59,6 +59,13 @@ CAMERA_STALE_S = 1.0
 last frame forever when the USB stream stalls (run 0242: the stream stopped
 23 s before the final verify, which then saw the scene as it had been and
 called a block lost that stood exactly where the hand had put it)."""
+POLICY_SPEED_FACTOR = 0.10
+"""Motion-generator speed for a learned policy's chunks: slower than the
+program's 0.12, since nobody has yet watched this policy move the arm."""
+POLICY_MAX_STEPS = 100
+"""The longest chunk a program may ask the policy host to execute at once."""
+POLICY_GRIPPER_DEADBAND_M = 0.005
+"""A chunk's final gripper width closer than this to the measured one is left alone."""
 HAND_EYE_ALPHA = 0.15
 """Weight of one placement residual in the eye's running correction. At 0.5
 the centimetre of noise in each residual walked the correction a few
@@ -94,12 +101,16 @@ class FrankaRealAdapter:
         run_observer: Any = None,
         allow_physical_motion: bool = False,
         task_context: TaskContext | None = None,
+        policy_client: Any = None,
     ) -> None:
         self._env = env
         self._registry = registry or FrankaRealTaskRegistry()
         self._run_observer = run_observer
         self._allow_physical_motion = bool(allow_physical_motion)
         self._task_context = task_context
+        self._policy_client = policy_client
+        """The learned-policy host; built lazily from the environment when None."""
+        self._policy_reset_done: set[str] = set()
         self.last_success_report: dict[str, Any] = {}
         """Evidence behind the most recent ``check_success`` verdict."""
         self._hand_eye = pose_to_matrix(
@@ -777,6 +788,167 @@ class FrankaRealAdapter:
             steps_executed=1,
             final_observation=self.get_observation(),
             diagnostics=report,
+        )
+
+    def _policy_host(self) -> Any:
+        if self._policy_client is None:
+            from cap_harness.franka_real.policy import HttpPolicyClient
+
+            self._policy_client = HttpPolicyClient()
+        return self._policy_client
+
+    def policy_chunk(
+        self,
+        *,
+        policy: str = "current",
+        steps: int = 10,
+        speed_factor: float | None = None,
+    ) -> ExecutionResult:
+        """Let a learned policy move the arm for one chunk of its actions.
+
+        Exposed to programs as ``franka_real.policy_chunk``. The policy host
+        (see :mod:`cap_harness.franka_real.policy`) gets the measured joints,
+        gripper width, end-effector position, external wrench and both camera
+        images, and answers with a chunk of joint targets plus a gripper
+        width. The first ``steps`` of that chunk go through the same guarded
+        waypoint path as every program motion -- joint limits, the workspace
+        box, Franka's own reflexes -- and the chunk's final gripper width is
+        applied after the motion when it differs from the measured one. The
+        policy proposes; the bench's bounds dispose. The record names the
+        policy on every chunk so an episode says who drove it.
+        """
+        denied = self._motion_denied()
+        if denied is not None:
+            return ExecutionResult(ok=False, steps_executed=0, error=denied)
+        try:
+            steps = int(steps)
+        except (TypeError, ValueError):
+            steps = 0
+        if not 1 <= steps <= POLICY_MAX_STEPS:
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(
+                    code=ErrorCode.INVALID_REQUEST,
+                    message=f"steps must be between 1 and {POLICY_MAX_STEPS}",
+                ),
+            )
+        policy = str(policy)
+        started = time.monotonic()
+        try:
+            observation = self.get_observation()
+        except ValueError as exc:  # no frame, or a stalled stream
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(code=ErrorCode.EXECUTION_FAILED, message=str(exc)),
+            )
+        raw = self._env.get_observations()
+        q = np.asarray(raw["joint_pos"], dtype=np.float64).reshape(ARM_DOF)
+        width_now = float(raw["gripper_width_m"])
+        ee_position = np.asarray(raw["ee_transform"], dtype=np.float64)[:3, 3]
+        wrench = self._env.external_wrench()
+        from cap_harness.franka_real.policy import encode_image_png
+
+        images = {
+            role: encode_image_png(camera.rgb) for role, camera in observation.cameras.items()
+        }
+        request = {
+            "policy": policy,
+            "state": [float(v) for v in q] + [width_now],
+            "ee_position": [float(v) for v in ee_position],
+            "force": [float(v) for v in wrench],
+            "images": images,
+        }
+        host = self._policy_host()
+        try:
+            if policy not in self._policy_reset_done:
+                host.reset(policy)
+                self._policy_reset_done.add(policy)
+            actions = np.asarray(host.act(request), dtype=np.float64)
+        except Exception as exc:
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(
+                    code=ErrorCode.EXECUTION_FAILED,
+                    message=f"policy host: {type(exc).__name__}: {str(exc)[:200]}",
+                    recoverable=True,
+                ),
+            )
+        inference_s = time.monotonic() - started
+        if actions.ndim != 2 or actions.shape[1] != ARM_DOF + 1 or not np.all(np.isfinite(actions)):
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(
+                    code=ErrorCode.EXECUTION_FAILED,
+                    message=(
+                        f"policy host returned an action chunk of shape {actions.shape}, "
+                        f"not (n, {ARM_DOF + 1}) finite"
+                    ),
+                    recoverable=True,
+                ),
+            )
+        chunk = actions[:steps]
+        joints = chunk[:, :ARM_DOF]
+        width = float(np.clip(chunk[-1, ARM_DOF], 0.0, self._env.config.gripper_max_width_m))
+        factor = float(speed_factor if speed_factor is not None else POLICY_SPEED_FACTOR)
+        self._env.note_event(
+            "policy_chunk",
+            policy=policy,
+            steps=int(joints.shape[0]),
+            chunk_size=int(actions.shape[0]),
+            width_m=round(width, 4),
+            speed_factor=factor,
+        )
+        try:
+            self._env.execute_waypoints(joints, speed_factor=factor)
+        except ValueError as exc:
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(
+                    code=ErrorCode.SAFETY_INTERLOCK,
+                    message=f"workspace guard refused the policy's chunk: {exc}",
+                    recoverable=True,
+                ),
+            )
+        except Exception as exc:  # libfranka reflexes, network, limits
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(
+                    code=ErrorCode.CONTROLLER_FAILED, message=f"{type(exc).__name__}: {exc}"
+                ),
+            )
+        gripper_moved = abs(width - width_now) > POLICY_GRIPPER_DEADBAND_M
+        if gripper_moved and not self._env.set_gripper_width(width)["ok"]:
+            return ExecutionResult(
+                ok=False,
+                steps_executed=int(joints.shape[0]),
+                error=ApiError(
+                    code=ErrorCode.CONTROLLER_FAILED,
+                    message="the policy's chunk moved the arm but the gripper command failed",
+                ),
+            )
+        after = self._env.get_observations()
+        ee_after = np.asarray(after["ee_transform"], dtype=np.float64)[:3, 3]
+        return ExecutionResult(
+            ok=True,
+            steps_executed=int(joints.shape[0]),
+            diagnostics={
+                "policy": policy,
+                "chunk_size": int(actions.shape[0]),
+                "steps": int(joints.shape[0]),
+                "speed_factor": factor,
+                "gripper_width_m": round(width, 4),
+                "gripper_moved": bool(gripper_moved),
+                "gripper_width_after_m": round(float(after["gripper_width_m"]), 4),
+                "ee_after": [round(float(v), 4) for v in ee_after],
+                "inference_s": round(inference_s, 3),
+                "elapsed_s": round(time.monotonic() - started, 3),
+            },
         )
 
     # -- verdicts and metadata ---------------------------------------------
