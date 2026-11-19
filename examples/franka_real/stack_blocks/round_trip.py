@@ -24,6 +24,7 @@ NADIR_M = 0.04   # farther than this from the survey spot, look again from above
 VERIFY_M = 0.03
 VERIFY_LOOK_M = 0.20  # how far from the target the verify will accept the block as read
 DROPPED_M = 0.05      # seen farther than this from the release point: it left the jaws, not an eye error
+LYING_TOP_MAX = TABLE_Z + BLOCK_FLAT_M + 0.004  # a lying block tops out here; a higher reading is bleed
 RELOOK_TRUST_M = 0.015  # a hover re-look that moves the block farther than this from the survey's reading,
                         # and then a pad still lands on it, is distrusted (run 0315: 3 cm, twelve times)
 HELD_MIN = 0.08        # gripper fraction below which the close met air
@@ -364,7 +365,14 @@ def pose(x, y, z, quat):
 
 def pick(block, yaw):
     quat = down_quat(yaw)
-    grasp_z = max(block["top"] - GRASP_OFFSET, TABLE_Z + 0.008)
+    top = block["top"]
+    if not block.get("standing"):
+        # A lying block's top is where its 28 mm puts it; a mask's bleed can
+        # read it a centimetre high (0.0545, run 0339), and a grasp floor set
+        # from that put a pad standing on the block within the near-floor
+        # band, so the "floor" close met air, eleven times.
+        top = min(top, LYING_TOP_MAX)
+    grasp_z = max(top - GRASP_OFFSET, TABLE_Z + 0.008)
     turned = False
     recentred = False
     relooked = False
