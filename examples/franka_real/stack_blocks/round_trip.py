@@ -284,6 +284,18 @@ def joint_margin(x, y, z, yaw):
     return min(min(q[i] - JOINT_LOWER[i], JOINT_UPPER[i] - q[i]) for i in range(7))
 
 
+def yaw_margin(block, yaw):
+    """The least joint margin over the pick hover and the carry and place
+    heights at every spot. Run 0355 checked A, B and C only, carried to E
+    with the wrist 0.05 rad from its stop, and the descent to the pre-place
+    pose was planned through the other branch, out of the box."""
+    margin = joint_margin(block["x"], block["y"], SAFE_Z, yaw)
+    for spot in (A, B, C, D, E, F, G):
+        margin = min(margin, joint_margin(spot[0], spot[1], 0.06, yaw),
+                     joint_margin(spot[0], spot[1], CARRY_Z, yaw))
+    return margin
+
+
 def grasp_yaw(block, others):
     """Fingers across the block's 28 mm width, by a yaw the arm can hold.
 
@@ -298,10 +310,7 @@ def grasp_yaw(block, others):
     base = box_yaw(block["geometry"])  # the long axis; fingers travel at yaw - 90, across the width
     options = []
     for candidate in (fold(base), fold(base + math.pi)):
-        margin = min(joint_margin(block["x"], block["y"], SAFE_Z, candidate),
-                     joint_margin(A[0], A[1], 0.06, candidate),
-                     joint_margin(B[0], B[1], 0.06, candidate),
-                     joint_margin(C[0], C[1], 0.06, candidate))
+        margin = yaw_margin(block, candidate)
         options.append((margin >= LIMIT_MARGIN_RAD,
                         round(camera_clearance(block, candidate, others), 3),
                         -abs(candidate), candidate, round(margin, 3)))
@@ -349,10 +358,7 @@ def choose_yaw(block, others):
         # the fingers turned 90 degrees: across the length, 12 mm of margin
         # a side, with the shifted retries to cover it.
         for candidate in (fold(yaw + math.pi / 2.0), fold(yaw - math.pi / 2.0)):
-            alt_margin = min(joint_margin(block["x"], block["y"], SAFE_Z, candidate),
-                             joint_margin(A[0], A[1], 0.06, candidate),
-                             joint_margin(B[0], B[1], 0.06, candidate),
-                             joint_margin(C[0], C[1], 0.06, candidate))
+            alt_margin = yaw_margin(block, candidate)
             if alt_margin < LIMIT_MARGIN_RAD:
                 continue
             if finger_clear(block, candidate, others) is not None:
@@ -592,43 +598,20 @@ def spot_clear(spot, seen):
     return True
 
 
-WOUND_RAD = 1.5  # the base joint this far from forward: the arm has wound into another branch
-
-
-def wound():
-    """Whether the arm has wound round: turned grasps add up, the solver keeps
-    the solution nearest the seed, and once the base joint is past 90 degrees
-    every joint-space path swings the hand wide. Run 0355: base at -137
-    degrees before a pick; the descent to the pre-place pose planned through
-    y -0.33, z 0.59, and the guard refused it with the block in hand."""
-    q = get_robot_state().joint_positions["primary"]
-    return abs(float(q[0])) > WOUND_RAD
-
-
-def moved_or_unwound(target_pose, unwound):
-    """A guarded move; refused for its path, once, it goes home first (the
-    block stays in the jaws) and tries again from the canonical branch."""
-    moved = move_to_pose(target_pose, max_steps=LONG_MOVE_STEPS)
-    if moved.ok or unwound[0]:
-        return moved
-    if "workspace guard" not in str(moved.error.message):
-        return moved
-    go_home()
-    unwound[0] = True
-    return move_to_pose(target_pose, max_steps=LONG_MOVE_STEPS)
-
-
 def place(block, grasp, slot):
+    # No "unwinding" here. A base joint past 90 degrees is the arm's normal
+    # reach for a block lying across the table (yaw ~80: the solver has no
+    # solution near the home branch at all, checked offline after run 0357),
+    # and go_home opens the jaws before it moves: the one attempt dropped
+    # blue at the front edge (run 0357). What failed in run 0355 was a carry
+    # yaw with the wrist at its stop, and that is yaw_margin's job now.
     expect_z = contact_ee_z(block)
     quat = grasp["quat"]
-    unwound = [False]
-    if wound():
-        go_home()  # with the block held: home is above the table, nothing in the way
-        unwound[0] = True
-    if not must(moved_or_unwound(pose(slot[0], slot[1], CARRY_Z, quat), unwound), "carry"):
+    if not must(move_to_pose(pose(slot[0], slot[1], CARRY_Z, quat),
+                             max_steps=LONG_MOVE_STEPS), "carry"):
         return None
-    if not must(moved_or_unwound(pose(slot[0], slot[1], expect_z + PRE_PLACE_ABOVE_M, quat),
-                                 unwound), "pre_place"):
+    if not must(move_to_pose(pose(slot[0], slot[1], expect_z + PRE_PLACE_ABOVE_M, quat),
+                             max_steps=LONG_MOVE_STEPS), "pre_place"):
         return None
     touch = franka_real.descend_to_contact(floor_z=max(expect_z - FLOOR_BELOW_M, 0.004))
     must(touch, "lower")
@@ -642,7 +625,6 @@ def place(block, grasp, slot):
          "retreat")
     open_gripper()
     return {"expected_z": round(expect_z, 4),
-            "unwound": unwound[0],
             "contact": bool(touch.ok and report.get("contact")),
             "contact_z": report.get("contact_z"),
             "stop": report.get("stop"),
