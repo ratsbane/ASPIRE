@@ -59,7 +59,8 @@ G = [0.47, 0.08]      # clearance and E held the block itself, run 0321: the tab
                       # at x 0.60 the grasp search's shifts reached x 0.627 with the fingers open
                       # and twice pushed the red block off the front edge, runs 0221 and 0224)
 PICK_X_MAX = 0.60     # no grasp attempt is centred beyond this: the front edge is near
-REACH_X_MIN = 0.38    # nearer the base the hand cannot get down to the table (calibration 0358)
+REACH_X_MIN = 0.40    # nearer the base the hand cannot get down to the table (calibration 0358: probes at
+                      # x 0.36 and nearer refused; 0.38 is the margin, the working band starts at 0.40)
 TARGET_CLEAR_M = 0.07  # another block this close to a spot makes it unusable
 REHOME_M = 0.08   # found farther than this from A: the first carry takes it home
 ROUND_TRIPS = 3
