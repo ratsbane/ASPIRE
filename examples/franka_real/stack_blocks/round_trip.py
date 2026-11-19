@@ -725,18 +725,21 @@ for trip in range(ROUND_TRIPS):
             leg["status"] = "dropped"
             leg["slipped_m"] = round(slipped, 4)
             break
-        # Teach the eye from the hand: seen against released-at. The camera
-        # bracket moves; this keeps its correction current, every leg.
+        # Report the placement residual: seen against released-at. Recorded,
+        # not taught (weight 0): the lessons walked the correction 3 cm in
+        # one run (0351, every residual +2-3 cm in base y, none shrinking)
+        # and at 6 cm the survey and the hover disagreed by 6 cm and the pads
+        # closed on air (0353). Touch, first in every batch, is the authority
+        # until the controlled test says what a placement residual measures.
         lesson = franka_real.report_hand_eye_residual(
-            [after["x"], after["y"]], placed["released_at"])
+            [after["x"], after["y"]], placed["released_at"], weight=0.0)
         leg["eye_residual_xy"] = lesson["residual_xy"]
         leg["eye_drift"] = bool(lesson["drift"])
         leg["eye_offset_xyz"] = lesson["offset_xyz"]
         looks = 1
         while lesson["drift"] and looks < 3:
-            # The eye just moved (a loose mount): it has been taught half the
-            # residual, so look again with the taught eye before calling the
-            # placement off-target (run 0065: a 29 mm jump on one look).
+            # A large residual: look again before calling the placement
+            # off-target (run 0065: a 29 mm jump on one look).
             again = find(target)
             if again is None:
                 break
@@ -744,7 +747,7 @@ for trip in range(ROUND_TRIPS):
             after = again
             error = math.hypot(after["x"] - target[0], after["y"] - target[1])
             lesson = franka_real.report_hand_eye_residual(
-                [after["x"], after["y"]], placed["released_at"])
+                [after["x"], after["y"]], placed["released_at"], weight=0.0)
             leg["found_at"] = [round(after["x"], 4), round(after["y"], 4)]
             leg["error_m"] = round(error, 4)
             leg["eye_residual_xy"] = lesson["residual_xy"]
