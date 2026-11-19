@@ -777,10 +777,31 @@ class FrankaRealAdapter:
         denied = self._motion_denied()
         if denied is not None:
             return ExecutionResult(ok=False, steps_executed=0, error=denied)
-        try:
-            report = self._env.descend_until_contact(
+        def descend() -> dict[str, Any]:
+            return self._env.descend_until_contact(
                 floor_z=floor_z, speed_m_s=speed_m_s, contact_force_n=contact_force_n
             )
+
+        try:
+            try:
+                report = descend()
+            except Exception as exc:  # libfranka reflexes, network, limits
+                # A reflex mid-descent is transient (2026-11-19: the communication
+                # reflex aborted probes and placements alike, and the robot
+                # recovers within a second): recover and descend once more from
+                # wherever the hand stopped. Anything else, or a second abort,
+                # is reported as before.
+                text = str(exc).lower()
+                if isinstance(exc, ValueError) or not any(
+                    word in text for word in ("reflex", "aborted", "communication")
+                ):
+                    raise
+                recover = getattr(self._env, "recover_from_reflex", None)
+                if not callable(recover):
+                    raise
+                recover()
+                report = descend()
+                report["retried_after_reflex"] = True
         except ValueError as exc:
             return ExecutionResult(
                 ok=False,

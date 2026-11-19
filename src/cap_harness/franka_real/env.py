@@ -551,6 +551,14 @@ class RealFrankaEnv:
             "series": series,
         }
 
+    def recover_from_reflex(self) -> None:
+        """Clear the robot's reflex error and let it settle before another command."""
+        recover = getattr(self._panda, "recover", None)
+        if callable(recover):
+            recover()
+        time.sleep(REFLEX_RETRY_PAUSE_S)
+        self.note_event("reflex_recovered")
+
     def move_home(self, *, speed_factor: Optional[float] = None) -> dict[str, Any]:
         return self.execute_waypoints(
             np.asarray(self.config.home_joints, dtype=np.float64).reshape(1, ARM_DOF),
