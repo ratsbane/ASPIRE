@@ -360,8 +360,14 @@ class RealFrankaEnv:
         floor_z: float,
         speed_m_s: Optional[float] = None,
         contact_force_n: Optional[float] = None,
+        min_descent_m: Optional[float] = None,
     ) -> dict[str, Any]:
         """Lower the hand straight down until it meets something, or the floor.
+
+        ``min_descent_m`` is how far above the floor the hand must start
+        (``CONTACT_MIN_DESCENT_M`` by default); a retry after a reflex passes
+        0 so that it may finish a descent the reflex cut short near the floor
+        (run 0389: aborted 1.9 cm above the block, the retry refused).
 
         The second, and only other, way this package moves the arm. The motion
         generator behind :meth:`execute_waypoints` is open-loop and contact-
@@ -400,9 +406,10 @@ class RealFrankaEnv:
                 f"x={here[0]:.3f}, y={here[1]:.3f}"
             )
         start_z = float(here[2])
-        if start_z - floor_z < CONTACT_MIN_DESCENT_M:
+        min_descent = float(min_descent_m if min_descent_m is not None else CONTACT_MIN_DESCENT_M)
+        if start_z - floor_z < min_descent:
             raise ValueError(
-                f"the hand at z={start_z:.3f} m is within {CONTACT_MIN_DESCENT_M} m of the "
+                f"the hand at z={start_z:.3f} m is within {min_descent} m of the "
                 f"floor {floor_z:.3f} m; start the descent higher"
             )
         controller = self._make_impedance_controller()

@@ -777,9 +777,12 @@ class FrankaRealAdapter:
         denied = self._motion_denied()
         if denied is not None:
             return ExecutionResult(ok=False, steps_executed=0, error=denied)
-        def descend() -> dict[str, Any]:
+        def descend(retry: bool = False) -> dict[str, Any]:
+            options: dict[str, Any] = {}
+            if retry:
+                options["min_descent_m"] = 0.0  # finish what the reflex cut short, from wherever the hand is
             return self._env.descend_until_contact(
-                floor_z=floor_z, speed_m_s=speed_m_s, contact_force_n=contact_force_n
+                floor_z=floor_z, speed_m_s=speed_m_s, contact_force_n=contact_force_n, **options
             )
 
         try:
@@ -800,7 +803,7 @@ class FrankaRealAdapter:
                 if not callable(recover):
                     raise
                 recover()
-                report = descend()
+                report = descend(retry=True)
                 report["retried_after_reflex"] = True
         except ValueError as exc:
             return ExecutionResult(
