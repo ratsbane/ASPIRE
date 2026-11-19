@@ -288,15 +288,24 @@ def joint_margin(x, y, z, yaw):
     return min(min(q[i] - JOINT_LOWER[i], JOINT_UPPER[i] - q[i]) for i in range(7))
 
 
+NEXT_SLOT = [None]  # where this leg will place: set by the leg loop before the yaw is chosen
+
+
 def yaw_margin(block, yaw):
-    """The least joint margin over the pick hover and the carry and place
-    heights at every spot. Run 0355 checked A, B and C only, carried to E
-    with the wrist 0.05 rad from its stop, and the descent to the pre-place
-    pose was planned through the other branch, out of the box."""
+    """The least joint margin over the pick hover, the place height at A, B
+    and C, and the carry and place heights at this leg's slot. Run 0355
+    checked A, B and C only, carried to E with the wrist 0.05 rad from its
+    stop, and the descent to the pre-place pose was planned through the
+    other branch, out of the box. Checking every spot instead refused a
+    grasp for a spot the leg was not going to (run 0367, margin 0.22 at
+    some far spot, the block bound for B)."""
     margin = joint_margin(block["x"], block["y"], SAFE_Z, yaw)
-    for spot in (A, B, C, D, E, F, G):
-        margin = min(margin, joint_margin(spot[0], spot[1], 0.06, yaw),
-                     joint_margin(spot[0], spot[1], CARRY_Z, yaw))
+    for spot in (A, B, C):
+        margin = min(margin, joint_margin(spot[0], spot[1], 0.06, yaw))
+    slot = NEXT_SLOT[0]
+    if slot is not None:
+        margin = min(margin, joint_margin(slot[0], slot[1], 0.06, yaw),
+                     joint_margin(slot[0], slot[1], CARRY_Z, yaw))
     return margin
 
 
@@ -694,6 +703,7 @@ for trip in range(ROUND_TRIPS):
         leg["footprint"] = round(block["footprint"], 4)
         leg["standing"] = bool(block["standing"])
         others = neighbours(block)
+        NEXT_SLOT[0] = target
         yaw, blocked_by = choose_yaw(block, others)
         leg["neighbours"] = [[round(o[0], 3), round(o[1], 3)] for o in others]
         if blocked_by is not None:
