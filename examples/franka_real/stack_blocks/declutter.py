@@ -27,8 +27,10 @@ LOOK = [0.50, 0.00]
 COLOURS = ["blue", "green", "red"]
 TABLE_X = (0.30, 0.62)
 TABLE_Y = (-0.31, 0.20)
-HAND_X = (0.34, 0.56)    # where the pusher may go: the front edge took two blocks (runs 0221, 0224)
+HAND_X = (0.34, 0.56)    # where a push may end: the front edge took two blocks (runs 0221, 0224)
 HAND_Y = (-0.26, 0.18)   # the table runs to about 0.20 on the positive side (the basket is gone)
+START_X = (0.32, 0.62)   # where a push may start: in the clear, out to the table's edge (nothing to drop)
+START_Y = (-0.28, 0.19)  # (run 0347: a clump at x 0.55 had no room either way inside the end box)
 DOWN = [0.0, 1.0, 0.0, 0.0]
 
 FAILED_MOVE = {"stage": None, "error": None}
@@ -140,17 +142,19 @@ def clamp(v, lo, hi):
     return min(hi, max(lo, v))
 
 
-def margin(x, y):
-    """How far inside the pusher's box a point is (negative outside)."""
-    return min(x - HAND_X[0], HAND_X[1] - x, y - HAND_Y[0], HAND_Y[1] - y)
+def margin(x, y, box_x=HAND_X, box_y=HAND_Y):
+    """How far inside a box a point is (negative outside)."""
+    return min(x - box_x[0], box_x[1] - x, y - box_y[0], box_y[1] - y)
 
 
-def plan_sweep(group):
-    """Start and end of a sweep across the clump, pushing toward the table's middle.
-    None when the edge leaves no room for one either way."""
+def plan_sweep(group, along_axis=False):
+    """Start and end of a sweep through the clump, pushing toward the table's middle:
+    across its long axis (the bundle splits a row), or along it when asked (a train
+    push that at least brings a clump in from the edge, where the across sweep has
+    no room). None when the edge leaves no room either way."""
     cx = sum(b["x"] for b in group) / len(group)
     cy = sum(b["y"] for b in group) / len(group)
-    across = long_axis(group) + math.pi / 2.0
+    across = long_axis(group) + (0.0 if along_axis else math.pi / 2.0)
     # The clump's half-width along the sweep line, not its full radius: a row
     # of three is 12 cm long but 4 cm across, and the start sits off its side.
     reach = max(abs((b["x"] - cx) * math.cos(across) + (b["y"] - cy) * math.sin(across))
@@ -159,7 +163,7 @@ def plan_sweep(group):
     for sign in (1.0, -1.0):
         dx, dy = sign * math.cos(across), sign * math.sin(across)
         start = [cx - dx * (reach + APPROACH_GAP), cy - dy * (reach + APPROACH_GAP)]
-        if margin(start[0], start[1]) < 0.0:
+        if margin(start[0], start[1], START_X, START_Y) < 0.0:
             continue  # the clear side is off the table's working area
         # Shorten the push, along its own line, until it stays inside the box.
         beyond = PUSH_BEYOND
@@ -174,7 +178,10 @@ def plan_sweep(group):
         if best is None or rank > best[0]:
             best = (rank, {"start": [round(v, 4) for v in start], "end": [round(v, 4) for v in end],
                            "centre": [round(cx, 4), round(cy, 4)], "reach": round(reach, 4),
-                           "direction": [round(dx, 3), round(dy, 3)], "members": len(group)})
+                           "direction": [round(dx, 3), round(dy, 3)], "members": len(group),
+                           "along_axis": along_axis})
+    if best is None and not along_axis:
+        return plan_sweep(group, along_axis=True)
     return None if best is None else best[1]
 
 
