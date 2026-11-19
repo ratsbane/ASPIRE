@@ -50,6 +50,7 @@ CONTACT_UNLOAD_TICKS = 30  # ease the command back up to the contact height
 CONTACT_MIN_DESCENT_M = 0.025  # the guard travel plus room to measure a rate
 CONTACT_MAX_SPEED_M_S = 0.05
 REFLEX_RETRY_PAUSE_S = 0.5  # after a reflex: recover, settle, send the batch once more
+REFLEX_JOIN_PAUSE_S = 1.5   # after a reflex ends a controller: let its recovery log before the join
 CONTACT_STIFFNESS = (1500.0, 1500.0, 600.0, 60.0, 60.0, 60.0)
 """Cartesian impedance during a contact descent: [x, y, z] N/m, [rx, ry, rz] Nm/rad.
 
@@ -457,6 +458,7 @@ class RealFrankaEnv:
         recent_t: list[float] = []
         self.note_event("descend", floor_z=round(floor_z, 4), speed_m_s=speed, start_z=round(start_z, 4))
         self._panda.start_controller(controller)
+        aborted = False
         try:
             with self._panda.create_context(
                 frequency=int(round(1.0 / CONTACT_DT_S)), max_runtime=runtime
@@ -520,7 +522,20 @@ class RealFrankaEnv:
                     if tz <= command_floor + 1e-4:
                         stop = "press"
                         break
+        except BaseException:
+            aborted = True
+            raise
         finally:
+            if aborted:
+                # A reflex ended the controller's thread early and panda_py
+                # runs its automatic error recovery on that thread, logging
+                # through Python as it goes. stop_controller joins the thread
+                # with the interpreter lock held, so the recovery's log call
+                # waits for the lock and the join waits for the recovery:
+                # the hang of runs 0395 and 0422 (gdb: std::thread::join
+                # under panda_py). A sleep releases the lock long enough for
+                # the recovery to finish before the join.
+                time.sleep(REFLEX_JOIN_PAUSE_S)
             self._panda.stop_controller()
         self.motions_executed += 1
         end_z = contact_z if contact_z is not None else actual
