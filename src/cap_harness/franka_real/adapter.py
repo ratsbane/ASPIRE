@@ -150,13 +150,6 @@ class FrankaRealAdapter:
         table_z = float(getattr(self._env.config, "table_plane_z", 0.017))
         height = float(camera_matrix[2, 3]) - table_z
         report: dict[str, Any] = {"leveled": False, "camera_height_m": round(height, 3)}
-        if os.environ.get(WRIST_LEVEL_ENV, "1") in ("0", "off", "no"):
-            # The experiment's control: the camera pose as calibrated, no plane
-            # fit, no reuse of an earlier one (2026-11-19: the placement
-            # residuals were 1 cm on looks that leveled afresh and 2-4 cm on
-            # looks that reused a levelling, and the fit failed on most looks).
-            report["reason"] = "disabled"
-            return camera_matrix, report
         depth = getattr(frame, "depth_m", None)
         intrinsics = getattr(frame, "intrinsics", None)
         if height >= PLANE_MIN_HEIGHT_M and depth is not None and intrinsics is not None:
@@ -202,6 +195,19 @@ class FrankaRealAdapter:
                 report["reason"] = "too little depth"
         else:
             report["reason"] = "too low" if height < PLANE_MIN_HEIGHT_M else "no depth"
+        if os.environ.get(WRIST_LEVEL_ENV, "1") in ("0", "off", "no"):
+            # The experiment's control: the fit runs and is reported as usual,
+            # but the look uses the camera pose as calibrated (2026-11-19: the
+            # placement residuals were 1 cm on looks that leveled afresh and
+            # 2-4 cm on looks that reused a levelling, and the fit failed on
+            # most looks at 0.33 m). The fit still runs so that every code
+            # path, and every lazy import under it, is the same as when the
+            # levelling is applied: skipping it left a C-level import to
+            # happen under the program's frame, whose builtins are a mapping
+            # proxy, and that import fails (runs 9002, 9003).
+            report["applied"] = False
+            report["disabled"] = True
+            return camera_matrix, report
         if self._last_level is None:
             return camera_matrix, report
         rotation, dz = self._last_level

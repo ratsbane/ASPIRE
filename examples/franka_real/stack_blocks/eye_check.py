@@ -100,7 +100,7 @@ for key in summary:
                   "max_m": round(max(math.hypot(r[0], r[1]) for r in rows), 4)}
 result = {"ok": FAILED_MOVE["stage"] is None and all(e.get("seen") is not None for e in readings),
           "levelling": None if not readings or readings[0].get("level") is None
-          else ("disabled" if readings[0]["level"].get("reason") == "disabled" else "on"),
+          else ("disabled" if readings[0]["level"].get("disabled") else "on"),
           "means": means,
           "readings": readings,
           "move_failures": FAILED_MOVE}
