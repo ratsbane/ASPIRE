@@ -46,7 +46,16 @@ def build_real_station(
     from panda_py import libfranka
 
     config = load_station_config(station, config_root)
-    panda = panda_py.Panda(config.robot_host)
+    # panda_py's default is RealtimeConfig.kIgnore: the 1 kHz control thread
+    # runs at ordinary priority and loses packets to desktop load (2026-11-19:
+    # communication_constraints_violation reflexes with Chrome busy on omen,
+    # command success rate 60-77%). On a realtime kernel, enforce: libfranka
+    # then takes SCHED_FIFO for the control thread, or refuses to start
+    # loudly if it cannot (the user's rtprio limit must allow it; omen's is 99).
+    realtime = libfranka.RealtimeConfig.kIgnore
+    if libfranka.has_realtime_kernel():
+        realtime = libfranka.RealtimeConfig.kEnforce
+    panda = panda_py.Panda(config.robot_host, realtime_config=realtime)
     gripper = libfranka.Gripper(config.robot_host)
     camera = _open_camera(config)
     scene = None
