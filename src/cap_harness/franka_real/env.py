@@ -49,6 +49,7 @@ CONTACT_GUARD_TRAVEL_M = 0.018  # no verdict before the command has sunk this fa
 CONTACT_UNLOAD_TICKS = 30  # ease the command back up to the contact height
 CONTACT_MIN_DESCENT_M = 0.025  # the guard travel plus room to measure a rate
 CONTACT_MAX_SPEED_M_S = 0.05
+REFLEX_RETRY_PAUSE_S = 0.5  # after a reflex: recover, settle, send the batch once more
 CONTACT_STIFFNESS = (1500.0, 1500.0, 600.0, 60.0, 60.0, 60.0)
 """Cartesian impedance during a contact descent: [x, y, z] N/m, [rx, ry, rz] Nm/rad.
 
@@ -318,6 +319,22 @@ class RealFrankaEnv:
         )
         self.motions_executed += 1
         self.note_event("waypoints_done", converged=converged)
+        if not converged:
+            # A reflex aborts the motion and the generator reports
+            # non-convergence. The communication reflex is transient (2026-11-19:
+            # seven in a day on an idle-clean link, each recovered by the
+            # robot within a second, each one costing a run), so recover once
+            # and send the same batch again; a second failure is the caller's.
+            recover = getattr(self._panda, "recover", None)
+            if callable(recover):
+                recover()
+            time.sleep(REFLEX_RETRY_PAUSE_S)
+            self.note_event("waypoints_retry", target_q=[round(float(v), 5) for v in sent[-1]])
+            converged = bool(
+                self._panda.move_to_joint_position([row for row in sent], speed_factor=factor)
+            )
+            self.motions_executed += 1
+            self.note_event("waypoints_done", converged=converged, retried=True)
         if not converged:
             raise RuntimeError(
                 "the motion generator reported non-convergence at the final waypoint"
