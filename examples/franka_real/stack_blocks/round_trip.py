@@ -99,10 +99,18 @@ def has_depth(seg, depth):
     return int((covered > 0.1).sum()) >= 50
 
 
+STANDING_FOOTPRINT_MAX = 0.052  # a block on end is 28 mm square; bleed widens it, never to a block's length
+
+
 def is_standing(top, footprint):
-    """On end (top ~0.072, ~28 mm square) or lying (top ~0.045, its length showing)."""
+    """On end (top ~0.072, ~28 mm square) or lying (top ~0.045, its length showing).
+
+    A high top alone is not enough: with the leveling finding no table plane
+    a lying green read 0.062 high with a 62 mm footprint (run 0349) and the
+    pads closed on air at a standing block's mid-height, twelve times.
+    """
     if top > 0.06:
-        return True
+        return footprint < STANDING_FOOTPRINT_MAX
     if top < 0.05:
         return False
     return footprint < 0.045
@@ -219,7 +227,8 @@ def neighbours(block):
         # underside ~50 mm above the pads, measured 2026-11-17); lying ones
         # (28 mm) pass 29 mm under it.
         top = float(geometry.pose.position[2]) + extents[2] / 2.0
-        out.append((px, py, oyaw, long_half, short_half, top > 0.06))
+        out.append((px, py, oyaw, long_half, short_half,
+                    is_standing(top, max(extents[0], extents[1]))))
     return out
 
 
