@@ -1402,19 +1402,20 @@ def test_policy_chunk_closes_the_gripper_where_the_chunk_does_not_after_it():
     assert np.allclose(second.reshape(-1, 7)[-1], HOME, atol=1e-6)
 
 
-def test_policy_chunk_is_refused_below_the_policys_floor():
-    # A chunk whose very first waypoint is below the floor is refused before
-    # anything moves. The fake arm never reaches the table, so the env reports
-    # every pose 1 cm above it.
-    env, adapter, host = build_with_policy(policy_chunk_toward(HOME, 0.08))
+def test_policy_chunk_at_the_floor_does_not_move_but_may_close():
+    # The hand is at the floor and the chunk would take it lower: no motion,
+    # but the gripper change in the chunk is applied. The fake arm never
+    # reaches the table, so the env reports every pose 1 cm above it.
+    closing = [list(row[:7]) + [0.02] for row in policy_chunk_toward(HOME, 0.08)]
+    env, adapter, host = build_with_policy(closing)
     low = np.eye(4)
     low[:3, 3] = [0.5, 0.0, 0.010]
     env.fk_matrix = lambda q: low
     env._panda.batches.clear()
     result = adapter.policy_chunk(policy="current", steps=100)
-    assert not result.ok
-    assert result.error.code == ErrorCode.SAFETY_INTERLOCK
-    assert "floor" in result.error.message
+    assert result.ok, result.error
+    assert result.diagnostics["floored_at_step"] == 0
+    assert result.diagnostics["gripper_moved"] is True
     assert env._panda.batches == []
 
 

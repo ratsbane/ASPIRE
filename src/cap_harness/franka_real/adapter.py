@@ -965,20 +965,49 @@ class FrankaRealAdapter:
             if float(self._env.fk_matrix(q)[2, 3]) < POLICY_MIN_Z:
                 floored_at = row
                 break
-        if floored_at is not None:
-            if floored_at == 0:
+        if floored_at == 0:
+            # The hand is already at the floor and the chunk would take it
+            # lower: no motion, but the gripper change the policy makes in it
+            # is applied (run 0490: down to 2.7 cm, then every chunk refused
+            # outright, so it could neither close nor lift).
+            later = [float(w) for w in widths if abs(float(w) - width_now) > POLICY_GRIPPER_DEADBAND_M]
+            moved = bool(later)
+            if moved and not self._env.set_gripper_width(later[0])["ok"]:
                 return ExecutionResult(
                     ok=False,
                     steps_executed=0,
                     error=ApiError(
-                        code=ErrorCode.SAFETY_INTERLOCK,
-                        message=(
-                            f"workspace guard refused the policy's chunk: its first waypoint is "
-                            f"below the policy's floor {POLICY_MIN_Z} m"
-                        ),
-                        recoverable=True,
+                        code=ErrorCode.CONTROLLER_FAILED,
+                        message="the gripper command at the policy's floor failed",
                     ),
                 )
+            self._env.note_event(
+                "policy_chunk", policy=policy, steps=0, chunk_size=int(actions.shape[0]),
+                width_m=round(later[0], 4) if moved else round(width_now, 4),
+                speed_factor=0.0, segments=0, floored_at_step=0,
+            )
+            after = self._env.get_observations()
+            ee_after = np.asarray(after["ee_transform"], dtype=np.float64)[:3, 3]
+            return ExecutionResult(
+                ok=True,
+                steps_executed=0,
+                diagnostics={
+                    "policy": policy,
+                    "chunk_size": int(actions.shape[0]),
+                    "steps": 0,
+                    "speed_factor": 0.0,
+                    "gripper_width_m": round(later[0], 4) if moved else round(width_now, 4),
+                    "gripper_moved": moved,
+                    "gripper_moves": int(moved),
+                    "segments": 0,
+                    "floored_at_step": 0,
+                    "gripper_width_after_m": round(float(after["gripper_width_m"]), 4),
+                    "ee_after": [round(float(v), 4) for v in ee_after],
+                    "inference_s": round(inference_s, 3),
+                    "elapsed_s": round(time.monotonic() - started, 3),
+                },
+            )
+        if floored_at is not None:
             later = [float(w) for w in widths[floored_at:]
                      if abs(float(w) - float(widths[floored_at - 1])) > POLICY_GRIPPER_DEADBAND_M]
             joints = joints[:floored_at]
