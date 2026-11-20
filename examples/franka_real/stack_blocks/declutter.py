@@ -99,7 +99,9 @@ def blocks_in_view():
 def scan(at):
     if not must(survey(at[0], at[1]), "survey"):
         return None
-    return blocks_in_view()
+    seen = blocks_in_view()
+    TABLE_BLOCKS[:] = seen
+    return seen
 
 
 def leaning(block):
@@ -154,6 +156,21 @@ def margin(x, y, box_x=HAND_X, box_y=HAND_Y):
     return min(x - box_x[0], box_x[1] - x, y - box_y[0], box_y[1] - y)
 
 
+START_CLEAR_M = BLOCK_LONG_M / 2.0 + 0.02  # no block's centre this close to where the bundle comes down
+TABLE_BLOCKS = []                           # every block of the last scan, for the start check
+
+
+def start_clear(start, members):
+    """Whether the bundle can come down at `start` without landing on a block
+    that is not part of the push (run 0506: a descent refused at the start)."""
+    for b in TABLE_BLOCKS:
+        if any(b is m for m in members):
+            continue
+        if math.hypot(b["x"] - start[0], b["y"] - start[1]) < START_CLEAR_M:
+            return False
+    return True
+
+
 def plan_sweep(group, along_axis=False):
     """Start and end of a sweep through the clump, pushing toward the table's middle:
     across its long axis (the bundle splits a row), or along it when asked (a train
@@ -172,6 +189,8 @@ def plan_sweep(group, along_axis=False):
         start = [cx - dx * (reach + APPROACH_GAP), cy - dy * (reach + APPROACH_GAP)]
         if margin(start[0], start[1], START_X, START_Y) < 0.0:
             continue  # the clear side is off the table's working area
+        if not start_clear(start, group):
+            continue  # another block sits where the bundle would come down
         # Shorten the push, along its own line, until it stays inside the box.
         beyond = PUSH_BEYOND
         for step in range(20):
@@ -213,7 +232,7 @@ def plan_bring_in(block):
     plan = {"stray": [block["colour"], block["x"], block["y"]],
             "direction": [round(dx, 3), round(dy, 3)], "members": 1, "along_axis": False}
     start = [block["x"] - dx * (reach + APPROACH_GAP), block["y"] - dy * (reach + APPROACH_GAP)]
-    if margin(start[0], start[1], START_X, START_Y) < 0.0:
+    if margin(start[0], start[1], START_X, START_Y) < 0.0 or not start_clear(start, [block]):
         plan["marooned"] = True
         return plan
     beyond = PUSH_BEYOND
