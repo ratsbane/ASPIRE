@@ -23,6 +23,8 @@ POSITION_TOLERANCE_M = 0.005
 PANDA_LOWER = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
 PANDA_UPPER = np.array([2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973])
 PANDA_HOME = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
+IK_LIMIT_MARGIN_RAD = 0.08  # a solution closer than this to any joint stop is a last resort
+IK_LIMIT_PENALTY = 100.0    # added to its seed distance, so any clear solution wins
 """The canonical elbow-up branch. The analytical solver returns the branch its
 seed is in, and an arm that has wound into another branch over a long run
 (live, run 0229: shoulder at -105 degrees, forearm turned back) can find no
@@ -150,6 +152,13 @@ class FrankaIKProvider:
             if alignment < 1.0 + 2.0 * np.cos(np.deg2rad(3.0)):
                 continue
             cost = float(np.linalg.norm(candidate - seed))
+            # A solution hard against a joint stop is one the motion generator
+            # will not converge at (run 0445: base and wrist 0.04 rad from
+            # their limits, three refusals, no reflex). Prefer, by a wide
+            # margin in cost, solutions that keep IK_LIMIT_MARGIN_RAD clear.
+            margin = float(np.min(np.minimum(candidate - PANDA_LOWER, PANDA_UPPER - candidate)))
+            if margin < IK_LIMIT_MARGIN_RAD:
+                cost += IK_LIMIT_PENALTY
             if cost < best_cost:
                 best, best_cost = candidate, cost
         return best, best_cost
