@@ -33,6 +33,8 @@ GRASP_Z_MAX = 0.10        # a close with the hand this low is a grasp attempt, n
 CARRY_MIN_M = 0.08        # a release this far from the grasp is a carried leg
 STILL_M = 0.005           # the hand moving less than this per chunk is not moving
 STILL_CHUNKS = 4          # ~twenty seconds of a still hand ends the run
+DITHER_CHUNKS = 8         # this many chunks with the hand inside DITHER_M sideways, no grasp,
+DITHER_M = 0.03           # ends the run as dithering (~40 s of bobbing over one spot)
 MOVED_M = 0.05            # a block seen this far from where it started has moved
 LOOK = [0.50, 0.00]
 COLOURS = ["blue", "green", "red"]
@@ -106,6 +108,7 @@ grasp = None
 chunks = 0
 still = 0
 last_xyz = None
+recent_xy = []
 stop = None
 while chunks < CHUNK_BUDGET:
     chunk = franka_real.policy_chunk(policy=POLICY, steps=CHUNK_STEPS)
@@ -134,6 +137,19 @@ while chunks < CHUNK_BUDGET:
         stop = "no_progress"
         events.append({"chunk": chunks, "stop": stop})
         break
+    # Bobbing in place: the hand going down and back up over one spot with
+    # nothing gained is no progress either, though it never stands still
+    # (run 0506, watched by Doug: down ~10 cm and up, again and again).
+    recent_xy.append([xyz[0], xyz[1]])
+    if grasp is not None:
+        recent_xy = []
+    if len(recent_xy) >= DITHER_CHUNKS:
+        window = recent_xy[-DITHER_CHUNKS:]
+        spread = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a in window for b in window)
+        if spread < DITHER_M:
+            stop = "dithering"
+            events.append({"chunk": chunks, "stop": stop, "spread_m": round(spread, 4)})
+            break
 if stop is None:
     stop = "budget"
 
