@@ -951,20 +951,42 @@ class FrankaRealAdapter:
         # applied where the policy put it: a 100-step chunk can descend, close
         # and lift, and the fingers must close at the bottom, not after the lift.
         # The whole chunk is guarded before anything moves.
+        # The policy has no touch: it commands positions, and the program's last
+        # centimetre is a contact descent it does not have. No policy waypoint
+        # goes below POLICY_MIN_Z (run 0476: a chunk to 1.9 cm, the table at 1.7,
+        # stopped by the robot's own contact reflex). The floor is a stop, as the
+        # program's descent is: the chunk runs down to the last row above it and
+        # ends there; a gripper change the policy makes later in the chunk is
+        # applied at that point, so a descend-and-close becomes a close at the
+        # floor, and the next chunk decides what follows (run 0488: refusing the
+        # whole chunk left the policy no way to grasp at all).
+        floored_at = None
+        for row, q in enumerate(joints):
+            if float(self._env.fk_matrix(q)[2, 3]) < POLICY_MIN_Z:
+                floored_at = row
+                break
+        if floored_at is not None:
+            if floored_at == 0:
+                return ExecutionResult(
+                    ok=False,
+                    steps_executed=0,
+                    error=ApiError(
+                        code=ErrorCode.SAFETY_INTERLOCK,
+                        message=(
+                            f"workspace guard refused the policy's chunk: its first waypoint is "
+                            f"below the policy's floor {POLICY_MIN_Z} m"
+                        ),
+                        recoverable=True,
+                    ),
+                )
+            later = [float(w) for w in widths[floored_at:]
+                     if abs(float(w) - float(widths[floored_at - 1])) > POLICY_GRIPPER_DEADBAND_M]
+            joints = joints[:floored_at]
+            widths = widths[:floored_at].copy()
+            if later:
+                widths[-1] = later[0]
+            width = float(widths[-1])
         refusal = self._env.guard_waypoints(joints)
-        if refusal is None:
-            # The policy has no touch: it commands positions, and the program's
-            # last centimetre is a contact descent it does not have. No policy
-            # waypoint goes below POLICY_MIN_Z (run 0476: a chunk to 1.9 cm,
-            # the table at 1.7, stopped by the robot's own contact reflex).
-            for row, q in enumerate(joints):
-                z = float(self._env.fk_matrix(q)[2, 3])
-                if z < POLICY_MIN_Z:
-                    refusal = (
-                        f"waypoint {row} puts the hand at z={z:.3f} m, below the policy's floor "
-                        f"{POLICY_MIN_Z} m (no contact sensing in a policy chunk)"
-                    )
-                    break
         if refusal is not None:
             return ExecutionResult(
                 ok=False,
@@ -1042,6 +1064,7 @@ class FrankaRealAdapter:
                 "gripper_moved": bool(gripper_moved),
                 "gripper_moves": gripper_moves,
                 "segments": len(segments),
+                "floored_at_step": floored_at,
                 "gripper_width_after_m": round(float(after["gripper_width_m"]), 4),
                 "ee_after": [round(float(v), 4) for v in ee_after],
                 "inference_s": round(inference_s, 3),

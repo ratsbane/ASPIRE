@@ -1403,9 +1403,9 @@ def test_policy_chunk_closes_the_gripper_where_the_chunk_does_not_after_it():
 
 
 def test_policy_chunk_is_refused_below_the_policys_floor():
-    # Any chunk whose hand would go below the policy's floor is refused before
-    # anything moves. The fake arm's kinematics never reaches the table, so the
-    # env reports every pose 1 cm above it.
+    # A chunk whose very first waypoint is below the floor is refused before
+    # anything moves. The fake arm never reaches the table, so the env reports
+    # every pose 1 cm above it.
     env, adapter, host = build_with_policy(policy_chunk_toward(HOME, 0.08))
     low = np.eye(4)
     low[:3, 3] = [0.5, 0.0, 0.010]
@@ -1416,3 +1416,35 @@ def test_policy_chunk_is_refused_below_the_policys_floor():
     assert result.error.code == ErrorCode.SAFETY_INTERLOCK
     assert "floor" in result.error.message
     assert env._panda.batches == []
+
+
+def test_policy_chunk_stops_at_the_floor_and_closes_there():
+    # Down, close at the bottom, lift: with the bottom below the floor, the arm
+    # stops at the last row above it and the gripper closes there; no lift.
+    target_low = HOME + np.array([0.05, 0.08, 0.0, 0.05, 0.0, 0.02, 0.0])
+    down = policy_chunk_toward(target_low, 0.08, length=50)
+    lift = []
+    for index in range(50):
+        fraction = (index + 1) / 50
+        q = target_low + fraction * (HOME - target_low)
+        lift.append(list(q) + [0.02])
+    env, adapter, host = build_with_policy(down + lift)
+    real_fk = env.fk_matrix
+
+    def fk(q):
+        m = np.array(real_fk(q), dtype=float)
+        # rows past 40 of the descent are "below the floor"
+        if np.allclose(q, np.asarray(down[40][:7])) or float(np.linalg.norm(np.asarray(q) - target_low)) < float(
+            np.linalg.norm(np.asarray(down[40][:7]) - target_low)
+        ):
+            m[2, 3] = 0.010
+        return m
+
+    env.fk_matrix = fk
+    env._panda.batches.clear()
+    result = adapter.policy_chunk(policy="current", steps=100)
+    assert result.ok, result.error
+    assert result.diagnostics["floored_at_step"] == 40
+    assert result.diagnostics["gripper_moves"] == 1
+    sent, _ = env._panda.batches[-1]
+    assert np.allclose(sent.reshape(-1, 7)[-1], down[39][:7], atol=1e-6)
