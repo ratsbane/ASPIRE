@@ -1373,3 +1373,30 @@ def test_policy_chunk_needs_motion_authorization_and_a_live_host():
     assert env._panda.batches == []
     bad = adapter.policy_chunk(steps=0)
     assert not bad.ok and bad.error.code == ErrorCode.INVALID_REQUEST
+
+
+def test_policy_chunk_closes_the_gripper_where_the_chunk_does_not_after_it():
+    # Down to a grasp, close, then lift: the close must happen at the bottom.
+    target_low = HOME + np.array([0.05, 0.08, 0.0, 0.05, 0.0, 0.02, 0.0])
+    down = policy_chunk_toward(target_low, 0.08, length=50)
+    lift = []
+    for index in range(50):
+        fraction = (index + 1) / 50
+        q = target_low + fraction * (HOME - target_low)
+        lift.append(list(q) + [0.02])
+    env, adapter, host = build_with_policy(down + lift)
+    env._panda.batches.clear()
+
+    result = adapter.policy_chunk(policy="current", steps=100)
+
+    assert result.ok, result.error
+    assert result.diagnostics["segments"] == 2
+    assert result.diagnostics["gripper_moves"] == 1
+    # Two motions: down to the grasp row, then the lift; the gripper closed between them.
+    assert len(env._panda.batches) == 2
+    first, _ = env._panda.batches[0]
+    second, _ = env._panda.batches[1]
+    # The first motion ends at the row where the width changes (the first lift
+    # row carries the close), the second ends back at home.
+    assert np.allclose(first.reshape(-1, 7)[-1], lift[0][:7], atol=1e-6)
+    assert np.allclose(second.reshape(-1, 7)[-1], HOME, atol=1e-6)

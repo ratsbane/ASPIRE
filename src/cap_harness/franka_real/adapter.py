@@ -938,8 +938,33 @@ class FrankaRealAdapter:
             )
         chunk = actions[:steps]
         joints = chunk[:, :ARM_DOF]
-        width = float(np.clip(chunk[-1, ARM_DOF], 0.0, self._env.config.gripper_max_width_m))
+        max_width = self._env.config.gripper_max_width_m
+        widths = np.clip(chunk[:, ARM_DOF], 0.0, max_width)
+        width = float(widths[-1])
         factor = float(speed_factor if speed_factor is not None else POLICY_SPEED_FACTOR)
+        # The chunk runs as segments split at every gripper change, each change
+        # applied where the policy put it: a 100-step chunk can descend, close
+        # and lift, and the fingers must close at the bottom, not after the lift.
+        # The whole chunk is guarded before anything moves.
+        refusal = self._env.guard_waypoints(joints)
+        if refusal is not None:
+            return ExecutionResult(
+                ok=False,
+                steps_executed=0,
+                error=ApiError(
+                    code=ErrorCode.SAFETY_INTERLOCK,
+                    message=f"workspace guard refused the policy's chunk: {refusal}",
+                    recoverable=True,
+                ),
+            )
+        segments: list[tuple[int, int, float | None]] = []
+        start, current = 0, width_now
+        for row in range(joints.shape[0]):
+            if abs(float(widths[row]) - current) > POLICY_GRIPPER_DEADBAND_M:
+                segments.append((start, row + 1, float(widths[row])))
+                start, current = row + 1, float(widths[row])
+        if start < joints.shape[0]:
+            segments.append((start, joints.shape[0], None))
         self._env.note_event(
             "policy_chunk",
             policy=policy,
@@ -947,37 +972,44 @@ class FrankaRealAdapter:
             chunk_size=int(actions.shape[0]),
             width_m=round(width, 4),
             speed_factor=factor,
+            segments=len(segments),
         )
-        try:
-            self._env.execute_waypoints(joints, speed_factor=factor)
-        except ValueError as exc:
-            return ExecutionResult(
-                ok=False,
-                steps_executed=0,
-                error=ApiError(
-                    code=ErrorCode.SAFETY_INTERLOCK,
-                    message=f"workspace guard refused the policy's chunk: {exc}",
-                    recoverable=True,
-                ),
-            )
-        except Exception as exc:  # libfranka reflexes, network, limits
-            return ExecutionResult(
-                ok=False,
-                steps_executed=0,
-                error=ApiError(
-                    code=ErrorCode.CONTROLLER_FAILED, message=f"{type(exc).__name__}: {exc}"
-                ),
-            )
-        gripper_moved = abs(width - width_now) > POLICY_GRIPPER_DEADBAND_M
-        if gripper_moved and not self._env.set_gripper_width(width)["ok"]:
-            return ExecutionResult(
-                ok=False,
-                steps_executed=int(joints.shape[0]),
-                error=ApiError(
-                    code=ErrorCode.CONTROLLER_FAILED,
-                    message="the policy's chunk moved the arm but the gripper command failed",
-                ),
-            )
+        gripper_moves = 0
+        executed = 0
+        for first, last, grip in segments:
+            try:
+                self._env.execute_waypoints(joints[first:last], speed_factor=factor)
+            except ValueError as exc:
+                return ExecutionResult(
+                    ok=False,
+                    steps_executed=executed,
+                    error=ApiError(
+                        code=ErrorCode.SAFETY_INTERLOCK,
+                        message=f"workspace guard refused the policy's chunk: {exc}",
+                        recoverable=True,
+                    ),
+                )
+            except Exception as exc:  # libfranka reflexes, network, limits
+                return ExecutionResult(
+                    ok=False,
+                    steps_executed=executed,
+                    error=ApiError(
+                        code=ErrorCode.CONTROLLER_FAILED, message=f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+            executed = last
+            if grip is not None:
+                gripper_moves += 1
+                if not self._env.set_gripper_width(grip)["ok"]:
+                    return ExecutionResult(
+                        ok=False,
+                        steps_executed=executed,
+                        error=ApiError(
+                            code=ErrorCode.CONTROLLER_FAILED,
+                            message="the policy's chunk moved the arm but the gripper command failed",
+                        ),
+                    )
+        gripper_moved = gripper_moves > 0
         after = self._env.get_observations()
         ee_after = np.asarray(after["ee_transform"], dtype=np.float64)[:3, 3]
         return ExecutionResult(
@@ -990,6 +1022,8 @@ class FrankaRealAdapter:
                 "speed_factor": factor,
                 "gripper_width_m": round(width, 4),
                 "gripper_moved": bool(gripper_moved),
+                "gripper_moves": gripper_moves,
+                "segments": len(segments),
                 "gripper_width_after_m": round(float(after["gripper_width_m"]), 4),
                 "ee_after": [round(float(v), 4) for v in ee_after],
                 "inference_s": round(inference_s, 3),
