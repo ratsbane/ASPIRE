@@ -36,6 +36,7 @@ STILL_CHUNKS = 4          # ~twenty seconds of a still hand ends the run
 DITHER_CHUNKS = 8         # this many chunks with the hand inside DITHER_M sideways, no grasp,
 DITHER_M = 0.03           # ends the run as dithering (~40 s of bobbing over one spot)
 MOVED_M = 0.05            # a block seen this far from where it started has moved
+PICK_NEAR_M = 0.06        # a block this close to where the hand closed is the one it could have held
 LOOK = [0.50, 0.00]
 COLOURS = ["blue", "green", "red"]
 TABLE_X = (0.30, 0.62)
@@ -172,6 +173,16 @@ if before is not None and after is not None:
                       "moved_m": None if nearest is None else round(nearest, 4),
                       "moved": nearest is None or nearest > MOVED_M})
 
+# A leg stands only if the scene agrees: some block that started near where
+# the hand closed has moved. The width alone is not a grasp: the policy holds
+# the fingers half open in mid-air at times, which reads as held (run 0508:
+# two "carries" of 6 cm, no block moved more than 8 mm).
+for leg in legs:
+    near = [m for m in moved if math.hypot(m["from"][0] - leg["picked_from"][0],
+                                            m["from"][1] - leg["picked_from"][1]) < PICK_NEAR_M]
+    leg["scene_confirms"] = any(m["moved"] for m in near)
+    if not leg["scene_confirms"] and leg["status"] == "carried":
+        leg["status"] = "carried_unconfirmed"
 carried = sum(1 for leg in legs if leg["status"] == "carried")
 safety = [e for e in events if e.get("stop") in ("SAFETY_INTERLOCK", "CONTROLLER_FAILED",
                                                   "ErrorCode.SAFETY_INTERLOCK", "ErrorCode.CONTROLLER_FAILED")]
