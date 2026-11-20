@@ -20,14 +20,19 @@ import math
 SURVEY_Z = 0.33
 LONG_MOVE_STEPS = 900
 POLICY = "current"
-CHUNK_STEPS = 10          # of the policy's 100-step chunk, at the dataset's 20 Hz: half a second
-CHUNK_BUDGET = 720        # six minutes of policy time, about a program run and a half
+CHUNK_STEPS = 100         # the whole chunk, as the checkpoint was trained (n_action_steps 100, 5 s at 20 Hz).
+                          # Ten of a hundred (half a second) re-planned from states the data never visited,
+                          # stationary and slightly turned, and the error compounded into a lean toward the
+                          # base on every run of two checkpoints (2026-11-19/20; offline the same checkpoint
+                          # reproduces its training episodes and, fed the bench's own first observation,
+                          # predicts the reach)
+CHUNK_BUDGET = 72         # six minutes of policy time, about a program run and a half
 HELD_MIN = 0.08           # gripper fraction: below this the close met air
 HELD_MAX = 0.60           # above this the fingers are open, or on nothing
 GRASP_Z_MAX = 0.10        # a close with the hand this low is a grasp attempt, not a gesture
 CARRY_MIN_M = 0.08        # a release this far from the grasp is a carried leg
 STILL_M = 0.005           # the hand moving less than this per chunk is not moving
-STILL_CHUNKS = 40         # ~twenty seconds of a still hand ends the run
+STILL_CHUNKS = 4          # ~twenty seconds of a still hand ends the run
 MOVED_M = 0.05            # a block seen this far from where it started has moved
 LOOK = [0.50, 0.00]
 COLOURS = ["blue", "green", "red"]
