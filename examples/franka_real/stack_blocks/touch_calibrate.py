@@ -51,6 +51,7 @@ PROBE_X_MAX = 0.60      # no probe beyond this: the front edge is near (calibrat
 WORK_Y = (-0.26, 0.12)  # the basket stands beyond y 0.12; the grid's outer ring (4 cm) must stay
                         # inside the table's far edge at -0.31 (0368: a blue at -0.289 had probes
                         # at -0.329 refused, and a move abort on top)
+MAX_TARGETS = 3        # a third, in case the overhead look puts one outside the band (0484)
 STANDING_TOP_M = 0.06   # a block on end (top ~0.072): probed with the floor just below its top
 STANDING_FLOOR_BELOW_TOP_M = 0.025  # a miss beside a standing block stops here, the body still clear of it
 
@@ -197,7 +198,7 @@ go_home()  # start from home: a run can begin wherever the last one left the arm
 measurements = []
 targets = []
 for look in LOOKS:
-    if len(targets) >= 2:
+    if len(targets) >= MAX_TARGETS:
         break
     if not survey(look[0], look[1]).ok:
         continue
@@ -209,7 +210,7 @@ for look in LOOKS:
             continue  # one of each colour: the probe's centroid is per prompt
         targets.append({"name": colour, "prompt": colour + " block", "near": [seen["x"], seen["y"]],
                         "seen": seen, "look": look})
-        if len(targets) >= 2:
+        if len(targets) >= MAX_TARGETS:
             break
 if not targets:
     measurements.append({"name": None, "status": "not_seen", "looks": LOOKS})
@@ -226,6 +227,12 @@ for target in targets:
     entry["seen"] = seen
     if seen is None:
         entry["status"] = "not_seen"
+        continue
+    if not (WORK_X[0] < seen["x"] < WORK_X[1] and WORK_Y[0] < seen["y"] < WORK_Y[1]):
+        # The survey's oblique look put it in the band; straight above it is
+        # not (0484: a green read inside from the survey, at x 0.378 overhead,
+        # ten of its probes unreachable). Not a target.
+        entry["status"] = "outside_band"
         continue
     standing = bool(seen["top"] > STANDING_TOP_M)
     entry["standing"] = standing
