@@ -322,7 +322,7 @@ class RealFrankaEnv:
         self.motions_executed += 1
         self.note_event("waypoints_done", converged=converged)
         retries = 0
-        while not converged and retries < REFLEX_RETRIES:
+        while not converged and retries < REFLEX_RETRIES and self._last_abort_was_communication():
             # A reflex aborts the motion and the generator reports
             # non-convergence. The communication reflex is transient (2026-11-19:
             # a dozen in a day on an idle-clean link, each recovered by the
@@ -578,6 +578,26 @@ class RealFrankaEnv:
             "series_columns": ["t_s", "command_z", "hand_z", "fz_n"],
             "series": series,
         }
+
+    def _last_abort_was_communication(self) -> bool:
+        """Whether the motion that just failed was stopped by the communication
+        reflex alone. Only that one is retried: a contact reflex (cartesian or
+        joint) means the hand met something, and sending the same motion again
+        presses into it again (run 0476: a policy chunk to the table, retried
+        twice). When the reason cannot be read, nothing is retried."""
+        try:
+            errors = self._panda.get_state().last_motion_errors
+        except Exception:
+            return False
+        if errors is None:
+            return False
+        if not bool(getattr(errors, "communication_constraints_violation", False)):
+            return False
+        for name in ("cartesian_reflex", "joint_reflex", "self_collision_avoidance_violation",
+                     "power_limit_violation", "instability_detected"):
+            if bool(getattr(errors, name, False)):
+                return False
+        return True
 
     def recover_from_reflex(self) -> None:
         """Clear the robot's reflex error and let it settle before another command."""

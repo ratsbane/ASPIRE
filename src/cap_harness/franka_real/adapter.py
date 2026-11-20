@@ -67,6 +67,7 @@ POLICY_MAX_STEPS = 100
 """The longest chunk a program may ask the policy host to execute at once."""
 POLICY_GRIPPER_DEADBAND_M = 0.005
 DESCENT_REFLEX_RETRIES = 2  # a contact descent is resent this many times after reflexes
+POLICY_MIN_Z = 0.024        # no policy waypoint below this: the program's lowest grasp is ~0.025
 """A chunk's final gripper width closer than this to the measured one is left alone."""
 HAND_EYE_ALPHA = 0.15
 """Weight of one placement residual in the eye's running correction. At 0.5
@@ -802,8 +803,12 @@ class FrankaRealAdapter:
                     # DESCENT_REFLEX_RETRIES times (calibration 0434: two in a
                     # row on one probe). Anything else is reported as before.
                     text = str(exc).lower()
-                    if isinstance(exc, ValueError) or not any(
-                        word in text for word in ("reflex", "aborted", "communication")
+                    # Only the communication reflex is retried; a contact
+                    # reflex means the hand met something (run 0476).
+                    if (
+                        isinstance(exc, ValueError)
+                        or "communication_constraints_violation" not in text
+                        or any(word in text for word in ("cartesian_reflex", "joint_reflex", "self_collision"))
                     ):
                         raise
                     recover = getattr(self._env, "recover_from_reflex", None)
@@ -947,6 +952,19 @@ class FrankaRealAdapter:
         # and lift, and the fingers must close at the bottom, not after the lift.
         # The whole chunk is guarded before anything moves.
         refusal = self._env.guard_waypoints(joints)
+        if refusal is None:
+            # The policy has no touch: it commands positions, and the program's
+            # last centimetre is a contact descent it does not have. No policy
+            # waypoint goes below POLICY_MIN_Z (run 0476: a chunk to 1.9 cm,
+            # the table at 1.7, stopped by the robot's own contact reflex).
+            for row, q in enumerate(joints):
+                z = float(self._env.fk_matrix(q)[2, 3])
+                if z < POLICY_MIN_Z:
+                    refusal = (
+                        f"waypoint {row} puts the hand at z={z:.3f} m, below the policy's floor "
+                        f"{POLICY_MIN_Z} m (no contact sensing in a policy chunk)"
+                    )
+                    break
         if refusal is not None:
             return ExecutionResult(
                 ok=False,

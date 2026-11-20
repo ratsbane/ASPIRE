@@ -1400,3 +1400,19 @@ def test_policy_chunk_closes_the_gripper_where_the_chunk_does_not_after_it():
     # row carries the close), the second ends back at home.
     assert np.allclose(first.reshape(-1, 7)[-1], lift[0][:7], atol=1e-6)
     assert np.allclose(second.reshape(-1, 7)[-1], HOME, atol=1e-6)
+
+
+def test_policy_chunk_is_refused_below_the_policys_floor():
+    # Any chunk whose hand would go below the policy's floor is refused before
+    # anything moves. The fake arm's kinematics never reaches the table, so the
+    # env reports every pose 1 cm above it.
+    env, adapter, host = build_with_policy(policy_chunk_toward(HOME, 0.08))
+    low = np.eye(4)
+    low[:3, 3] = [0.5, 0.0, 0.010]
+    env.fk_matrix = lambda q: low
+    env._panda.batches.clear()
+    result = adapter.policy_chunk(policy="current", steps=100)
+    assert not result.ok
+    assert result.error.code == ErrorCode.SAFETY_INTERLOCK
+    assert "floor" in result.error.message
+    assert env._panda.batches == []
