@@ -854,8 +854,13 @@ class FrankaRealAdapter:
         policy: str = "current",
         steps: int = 10,
         speed_factor: float | None = None,
+        instruction: str | None = None,
     ) -> ExecutionResult:
         """Let a learned policy move the arm for one chunk of its actions.
+
+        ``instruction`` is passed to a language-conditioned policy (SmolVLA)
+        as its task, e.g. "carry the blue block from (52, -15) to (53, 0)";
+        a policy without a task input ignores it.
 
         Exposed to programs as ``franka_real.policy_chunk``. The policy host
         (see :mod:`cap_harness.franka_real.policy`) gets the measured joints,
@@ -911,6 +916,8 @@ class FrankaRealAdapter:
             "force": [float(v) for v in wrench],
             "images": images,
         }
+        if instruction:
+            request["instruction"] = str(instruction)
         host = self._policy_host()
         try:
             if policy not in self._policy_reset_done:

@@ -1449,3 +1449,12 @@ def test_policy_chunk_stops_at_the_floor_and_closes_there():
     assert result.diagnostics["gripper_moves"] == 1
     sent, _ = env._panda.batches[-1]
     assert np.allclose(sent.reshape(-1, 7)[-1], down[39][:7], atol=1e-6)
+
+
+def test_policy_chunk_passes_an_instruction_to_the_host():
+    env, adapter, host = build_with_policy(policy_chunk_toward(HOME, 0.08))
+    adapter.policy_chunk(policy="current", steps=10,
+                         instruction="carry the blue block from (52, -15) to (53, 0)")
+    assert host.requests[-1]["instruction"] == "carry the blue block from (52, -15) to (53, 0)"
+    adapter.policy_chunk(policy="current", steps=10)
+    assert "instruction" not in host.requests[-1]
