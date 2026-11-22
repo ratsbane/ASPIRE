@@ -17,13 +17,18 @@ import math
 SURVEY_Z = 0.33
 LONG_MOVE_STEPS = 900
 POLICY = "current"
-CHUNK_STEPS = 50          # the whole chunk: SmolVLA's n_action_steps is 50 (2.5 s at 20 Hz)
-LEG_CHUNK_BUDGET = 40     # 100 s of policy time per leg; the program takes ~40 s
+FULL_CHUNK = 50           # SmolVLA's chunk: 50 steps, 2.5 s at 20 Hz
+# Steps executed per chunk before the policy looks again (the execution
+# horizon). The whole chunk by default; CAP_HARNESS_POLICY_STEPS sets a shorter
+# one (e.g. 20: re-observe every second). The budget and the dither window are
+# kept in seconds, so a shorter horizon gets proportionally more chunks.
+CHUNK_STEPS = int(get_task_context().metadata.get("policy_steps") or FULL_CHUNK)
+LEG_CHUNK_BUDGET = (40 * FULL_CHUNK) // CHUNK_STEPS   # 100 s of policy time per leg; the program takes ~40 s
 LEGS = 6
 HELD_MIN = 0.08
 HELD_MAX = 0.60
 GRASP_Z_MAX = 0.10
-DITHER_CHUNKS = 12
+DITHER_CHUNKS = (12 * FULL_CHUNK) // CHUNK_STEPS      # 30 s without travel
 DITHER_M = 0.03
 VERIFY_M = 0.03           # the program's own verify tolerance
 LOOK = [0.50, 0.00]
@@ -183,6 +188,7 @@ result = {
     "ok": verified == LEGS and not safety,
     "producer": "policy",
     "conditioning": "instruction",
+    "policy_steps": CHUNK_STEPS,
     "colour": COLOUR,
     "verified": verified,
     "carried": verified,

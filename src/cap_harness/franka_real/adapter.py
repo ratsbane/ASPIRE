@@ -90,9 +90,24 @@ PLANE_TOLERANCES_M = (0.03, 0.015, 0.008)
 PLANE_RANSAC_TRIALS = 120
 """Three-point samples tried for the seed plane before the refits."""
 PLANE_MAX_JUMP_DEG = 8.0
+"""A fitted tilt this far from the last accepted one is a wrong plane, not the mount moving."""
 WRIST_LEVEL_ENV = "CAP_HARNESS_WRIST_LEVEL"
 """Set to 0 to look with the camera pose as calibrated: no plane fit, nothing reused."""
-"""A fitted tilt this far from the last accepted one is a wrong plane, not the mount moving."""
+POLICY_STEPS_ENV = "CAP_HARNESS_POLICY_STEPS"
+"""Steps of each policy chunk a learned program executes before it looks again.
+
+Passed to the program as the task metadata's ``policy_steps`` (None when unset:
+the program's own default). The runner, not the adapter, decides what to do
+with it; the adapter still enforces 1..POLICY_MAX_STEPS on every chunk."""
+
+
+def _env_int(name: str) -> int | None:
+    """An integer environment setting, or None when unset or not an integer."""
+    raw = os.environ.get(name, "").strip()
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
 
 
 class FrankaRealAdapter:
@@ -434,6 +449,7 @@ class FrankaRealAdapter:
                     "scene_reset": metadata.scene_reset,
                     "seed": int(seed),
                     "goal": dict(metadata.goal),
+                    "policy_steps": _env_int(POLICY_STEPS_ENV),
                 },
             )
         elif self._task_context is None:

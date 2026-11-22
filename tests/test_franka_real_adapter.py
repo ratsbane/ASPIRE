@@ -1116,6 +1116,23 @@ def test_clutter_tasks_carry_goal_geometry_to_programs():
     assert metadata["goal"] == dict(registry.resolve("pick_from_clutter", 0).goal)
 
 
+def test_policy_steps_reach_programs_from_the_environment(monkeypatch):
+    """A learned runner's execution horizon is set per run, not per file:
+    CAP_HARNESS_POLICY_STEPS lands in the task metadata, None when unset."""
+    from cap_harness.franka_real.adapter import POLICY_STEPS_ENV
+
+    _, adapter = build()
+    monkeypatch.delenv(POLICY_STEPS_ENV, raising=False)
+    adapter.reset("pick_from_clutter", 0)
+    assert adapter.get_task_context().metadata["policy_steps"] is None
+    monkeypatch.setenv(POLICY_STEPS_ENV, "20")
+    adapter.reset("pick_from_clutter", 1)
+    assert adapter.get_task_context().metadata["policy_steps"] == 20
+    monkeypatch.setenv(POLICY_STEPS_ENV, "lots")
+    adapter.reset("pick_from_clutter", 2)
+    assert adapter.get_task_context().metadata["policy_steps"] is None
+
+
 def test_clutter_example_programs_pass_the_sandbox_validator():
     import ast
     from pathlib import Path
@@ -1133,6 +1150,9 @@ def test_clutter_example_programs_pass_the_sandbox_validator():
         "stack_blocks/round_trip.py",
         "stack_blocks/cross_check.py",
         "stack_blocks/touch_calibrate.py",
+        "stack_blocks/learned_round_trip.py",
+        "stack_blocks/learned_legs.py",
+        "stack_blocks/declutter.py",
     ):
         source = (examples / relative).read_text()
         _ProgramValidator().visit(ast.parse(source))  # raises on a violation
