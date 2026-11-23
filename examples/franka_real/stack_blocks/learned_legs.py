@@ -15,6 +15,7 @@ import math
 # checks where the block landed: within VERIFY_M of the goal is a verified leg.
 
 SURVEY_Z = 0.33
+START_Z = 0.14            # round_trip.py's SAFE_Z, where it opens the jaws after a place
 LONG_MOVE_STEPS = 900
 POLICY = "current"
 FULL_CHUNK = 50           # SmolVLA's chunk: 50 steps, 2.5 s at 20 Hz
@@ -139,7 +140,19 @@ for leg_index in range(LEGS):
     instruction = "carry the " + COLOUR + " block from " + cm(start) + " to " + cm(target)
     leg = {"instruction": instruction, "from": [round(start[0], 4), round(start[1], 4)],
            "to": [round(target[0], 4), round(target[1], 4)], "chunks": 0, "grasped": False}
-    go_home()  # every training leg began where the last one ended; home is the safe common start
+    # Start where the training legs started. franka_raw_to_lerobot.py --per-leg
+    # cuts a leg at the jaws' full opening after the release, and round_trip.py
+    # opens them at SAFE_Z over the spot it just placed on: so all but each run's
+    # first leg began with the hand open at 0.14 m over the block it was about
+    # to carry. From home (each run's first leg only, its block near (50, 0))
+    # the policy reached for A whatever the words said: gate 610, six legs from
+    # B, six grasps of empty table near A.
+    if not must(move_to_pose({"position": [start[0], start[1], START_Z], "frame": "base",
+                              "rpy_deg": [180.0, 0.0, 0.0]}, max_steps=LONG_MOVE_STEPS), "leg_start"):
+        stop = "leg start"
+        legs.append(leg)
+        break
+    open_gripper()
     released = False
     recent = []
     while leg["chunks"] < LEG_CHUNK_BUDGET:
