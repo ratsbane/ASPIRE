@@ -119,15 +119,15 @@ events = []
 chunks_total = 0
 stop = None
 blocks = scan()
-# The seed's colour first, then the next, as round_trip.py chooses: the program
-# run before this one carried whatever colour it found, and the gate's table
-# may hold only that one (gate 610: two policy runs in three stopped at "block
-# not found" before a single chunk, looking for red or green with only blue out).
-if blocks is not None:
-    for colour in [COLOUR] + [c for c in COLOURS if c != COLOUR]:
-        if any(b[0] == colour for b in blocks):
-            COLOUR = colour
-            break
+# The colour of the block nearest A or B: the one the program run before this
+# put down, whatever the seed says. Gate 610: with only blue out, two policy
+# runs in three stopped at "block not found" looking for the seed's red or
+# green; gate 704 (run 722), with a red block at the table's edge, the seed's
+# red was carried instead of the blue the program had just placed.
+if blocks:
+    nearest = min(blocks, key=lambda b: min(math.hypot(b[1] - A[0], b[2] - A[1]),
+                                            math.hypot(b[1] - B[0], b[2] - B[1])))
+    COLOUR = nearest[0]
 for leg_index in range(LEGS):
     if blocks is None:
         stop = "survey"
