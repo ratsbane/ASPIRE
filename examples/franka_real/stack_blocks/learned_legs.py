@@ -118,6 +118,15 @@ events = []
 chunks_total = 0
 stop = None
 blocks = scan()
+# The seed's colour first, then the next, as round_trip.py chooses: the program
+# run before this one carried whatever colour it found, and the gate's table
+# may hold only that one (gate 610: two policy runs in three stopped at "block
+# not found" before a single chunk, looking for red or green with only blue out).
+if blocks is not None:
+    for colour in [COLOUR] + [c for c in COLOURS if c != COLOUR]:
+        if any(b[0] == colour for b in blocks):
+            COLOUR = colour
+            break
 for leg_index in range(LEGS):
     if blocks is None:
         stop = "survey"
