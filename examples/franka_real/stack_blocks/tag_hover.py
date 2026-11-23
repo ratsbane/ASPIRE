@@ -5,7 +5,7 @@
 # touched; the lowest hover is 20 cm above the table.
 
 LONG_MOVE_STEPS = 900
-HOLD_LOOKS = 25       # observations taken at each hold, ~4 s of standing still
+HOLD_LOOKS = 60       # observations at each hold: ~8 s still on the direct cable (25 gave only ~3.5 s, 2026-11-22)
 TAGS = {"0": [0.502, 0.241], "1": [0.509, -0.266]}   # where the survey looks put them
 HEIGHTS = [0.30, 0.22]
 DOWN = [0.0, 1.0, 0.0, 0.0]
