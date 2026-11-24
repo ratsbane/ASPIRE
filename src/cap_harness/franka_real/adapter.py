@@ -99,6 +99,19 @@ POLICY_STEPS_ENV = "CAP_HARNESS_POLICY_STEPS"
 Passed to the program as the task metadata's ``policy_steps`` (None when unset:
 the program's own default). The runner, not the adapter, decides what to do
 with it; the adapter still enforces 1..POLICY_MAX_STEPS on every chunk."""
+SPOT_MODE_ENV = "CAP_HARNESS_SPOT_MODE"
+"""How a self-resetting program chooses where to put things down.
+
+Passed to the program as the task metadata's ``spot_mode`` (None when unset: the
+program's fixed spots). ``random`` asks for goals drawn across the working band,
+for the varied-data campaign (2026-11-24): a policy trained between two fixed
+spots learned to return to them instead of looking for the block."""
+
+
+def _env_str(name: str) -> str | None:
+    """A string environment setting, or None when unset or blank."""
+    raw = os.environ.get(name, "").strip()
+    return raw or None
 
 
 def _env_int(name: str) -> int | None:
@@ -450,6 +463,7 @@ class FrankaRealAdapter:
                     "seed": int(seed),
                     "goal": dict(metadata.goal),
                     "policy_steps": _env_int(POLICY_STEPS_ENV),
+                    "spot_mode": _env_str(SPOT_MODE_ENV),
                 },
             )
         elif self._task_context is None:

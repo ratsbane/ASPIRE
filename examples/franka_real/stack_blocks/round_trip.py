@@ -65,6 +65,32 @@ TARGET_CLEAR_M = 0.07  # another block this close to a spot makes it unusable
 REHOME_M = 0.08   # found farther than this from A: the first carry takes it home
 ROUND_TRIPS = 3
 
+# The varied-data campaign (2026-11-24, CAP_HARNESS_SPOT_MODE=random): each
+# leg's goal is drawn across the working band instead of alternating A and B.
+# SmolVLA trained on A<->B legs learned to return to remembered spots and not
+# to look for the block (gates 610-740: 2 legs in 28). The table now also holds
+# things that are not the carried block: a blue cylinder and a blue semicircle
+# block ("blue block" matched both at ~0.9; "blue rectangular block" matched
+# only the block, 0.94, run 9702), two plush toys and a can. Those are kept
+# clear of, not carried.
+VARIED = get_task_context().metadata.get("spot_mode") == "random"
+NOUN = "rectangular block" if VARIED else "block"
+BAND_X = (0.46, 0.57)        # inside REACH_X_MIN and PICK_X_MAX with room for the grasp search's shifts
+BAND_Y = (-0.21, 0.07)       # E's and G's y, the band's known-reachable edges
+GOAL_FROM_BLOCK_M = 0.10     # a goal at least this far from where the block is: a carry, not a nudge
+GOAL_TRIES = 400             # cheap; 60 found nothing on a crowded table (run 0801) where pockets were free
+OBSTACLE_PROMPTS = ["stuffed animal", "can", "cylinder", "semicircle block"]  # not "toy": it matched every block too
+OBSTACLE_SCORE = 0.6
+OBSTACLE_MAX_M = 0.30        # larger than this is a merged blob or the table itself
+RNG = [(SEED * 2654435761 + 12345) % 4294967296]
+
+
+def uniform(lo, hi):
+    """A deterministic draw from the run's seed (a linear congruential generator:
+    programs may import only math)."""
+    RNG[0] = (RNG[0] * 1664525 + 1013904223) % 4294967296
+    return lo + (hi - lo) * RNG[0] / 4294967296.0
+
 FAILED_MOVE = {"stage": None, "error": None}
 
 
@@ -126,7 +152,7 @@ def see_lying(near, radius):
     it to the table's edge and the workspace guard said no). Standing blocks
     are never carried: too tall for the camera, and not the task.
     """
-    found = segment_text("wrist", COLOUR + " block")
+    found = segment_text("wrist", COLOUR + " " + NOUN)
     if not found.ok:
         return None
     depth = get_observation().cameras["wrist"].depth_m
@@ -599,16 +625,45 @@ def blocks_in_view():
         geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
         if max(float(v) for v in geometry.extents) > 0.12:
             continue
-        seen.append((float(geometry.pose.position[0]), float(geometry.pose.position[1])))
+        seen.append((float(geometry.pose.position[0]), float(geometry.pose.position[1]), 0.0))
+    if VARIED:
+        # Things that are not blocks are kept clear of by their own size: a
+        # plush toy reads 10-12 cm across (run 9701), and a spot beside it
+        # would put the fingers or the camera into it.
+        for prompt in OBSTACLE_PROMPTS:
+            other = segment_text("wrist", prompt)
+            if not other.ok:
+                continue
+            for seg in other.segmentations[:8]:
+                if float(seg.score) < OBSTACLE_SCORE or not has_depth(seg, depth):
+                    continue
+                geometry = estimate_geometry(mask_to_point_cloud(seg, "wrist", "base"))
+                extents = [float(v) for v in geometry.extents]
+                if max(extents) > OBSTACLE_MAX_M:
+                    continue
+                seen.append((float(geometry.pose.position[0]), float(geometry.pose.position[1]),
+                             max(extents[0], extents[1]) / 2.0))
     return seen
 
 
 def spot_clear(spot, seen):
-    """Whether no block in `seen` sits within TARGET_CLEAR_M of a place spot."""
-    for px, py in seen:
-        if math.hypot(px - spot[0], py - spot[1]) < TARGET_CLEAR_M:
+    """Whether nothing in `seen` sits within TARGET_CLEAR_M of a place spot,
+    counted from an obstacle's edge (its half-size) rather than its centre."""
+    for px, py, half in seen:
+        if math.hypot(px - spot[0], py - spot[1]) < TARGET_CLEAR_M + half:
             return False
     return True
+
+
+def random_goal(block, seen):
+    """A clear spot drawn across the band, at least GOAL_FROM_BLOCK_M from the block."""
+    for attempt in range(GOAL_TRIES):
+        spot = [round(uniform(BAND_X[0], BAND_X[1]), 3), round(uniform(BAND_Y[0], BAND_Y[1]), 3)]
+        if math.hypot(spot[0] - block["x"], spot[1] - block["y"]) < GOAL_FROM_BLOCK_M:
+            continue
+        if spot_clear(spot, seen):
+            return spot
+    return None
 
 
 def place(block, grasp, slot):
@@ -687,6 +742,12 @@ for trip in range(ROUND_TRIPS):
         if seen is None:
             leg["status"] = "move_failed"
             break
+        if VARIED:
+            # A goal drawn across the band; the fixed spots stay as the fallback.
+            leg["seen"] = [[round(s[0], 3), round(s[1], 3), round(s[2], 3)] for s in seen]
+            drawn = random_goal(block, seen)
+            if drawn is not None:
+                target = drawn
         for spot in (target, B if target == A else A, C, D, E, F, G):
             if math.hypot(spot[0] - block["x"], spot[1] - block["y"]) < TARGET_CLEAR_M:
                 continue
@@ -794,6 +855,8 @@ verified = sum(1 for leg in legs if leg["status"] == "verified")
 result = {
     "ok": FAILED_MOVE["stage"] is None and verified == 2 * ROUND_TRIPS,
     "colour": COLOUR,
+    "object": COLOUR + " " + NOUN,
+    "spot_mode": "random" if VARIED else "fixed",
     "spots": {"A": A, "B": B, "C": C, "D": D, "E": E, "F": F, "G": G},
     "verified": verified,
     "of": 2 * ROUND_TRIPS,

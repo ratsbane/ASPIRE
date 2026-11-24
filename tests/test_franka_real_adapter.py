@@ -1133,6 +1133,23 @@ def test_policy_steps_reach_programs_from_the_environment(monkeypatch):
     assert adapter.get_task_context().metadata["policy_steps"] is None
 
 
+def test_spot_mode_reaches_programs_from_the_environment(monkeypatch):
+    """The varied-data campaign's random goals are chosen per run:
+    CAP_HARNESS_SPOT_MODE lands in the task metadata, None when unset or blank."""
+    from cap_harness.franka_real.adapter import SPOT_MODE_ENV
+
+    _, adapter = build()
+    monkeypatch.delenv(SPOT_MODE_ENV, raising=False)
+    adapter.reset("pick_from_clutter", 0)
+    assert adapter.get_task_context().metadata["spot_mode"] is None
+    monkeypatch.setenv(SPOT_MODE_ENV, " random ")
+    adapter.reset("pick_from_clutter", 1)
+    assert adapter.get_task_context().metadata["spot_mode"] == "random"
+    monkeypatch.setenv(SPOT_MODE_ENV, "  ")
+    adapter.reset("pick_from_clutter", 2)
+    assert adapter.get_task_context().metadata["spot_mode"] is None
+
+
 def test_clutter_example_programs_pass_the_sandbox_validator():
     import ast
     from pathlib import Path
@@ -1153,6 +1170,7 @@ def test_clutter_example_programs_pass_the_sandbox_validator():
         "stack_blocks/learned_round_trip.py",
         "stack_blocks/learned_legs.py",
         "stack_blocks/declutter.py",
+        "stack_blocks/inventory.py",
     ):
         source = (examples / relative).read_text()
         _ProgramValidator().visit(ast.parse(source))  # raises on a violation
