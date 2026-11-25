@@ -702,14 +702,25 @@ def place(block, grasp, slot):
             "released_at": [round(truth[0], 4), round(truth[1], 4)]}
 
 
-go_home()  # start from home: a run can begin wherever the last one left the arm (run 0121)
+def cm(p):
+    return "(" + str(int(round(p[0] * 100))) + ", " + str(int(round(p[1] * 100))) + ")"
+
+
+def say(text):
+    # For the bench's status page (franka_real.announce, 2026-11-25); a no-op without one.
+    franka_real.announce("leg " + str(len(legs)) + "/" + str(2 * ROUND_TRIPS) + ": " + text)
+
+
 legs = []
+franka_real.announce("round trip, " + ("random goals" if VARIED else "fixed spots") + ": going home")
+go_home()  # start from home: a run can begin wherever the last one left the arm (run 0121)
 origin = FIRST_LOOKS[0]
 rehome = False
 for trip in range(ROUND_TRIPS):
     for outbound in (True, False):
         leg = {"trip": trip, "from": origin, "status": "started"}
         legs.append(leg)
+        say("looking for the " + COLOUR + " " + NOUN)
         if len(legs) == 1:
             block = None
             # The seed's colour first; if no lying block of it is within the
@@ -727,6 +738,7 @@ for trip in range(ROUND_TRIPS):
             block = find(origin, NEAR_M)
         if block is None:
             leg["status"] = "not_found"
+            say("could not find the " + COLOUR + " " + NOUN)
             break
         if len(legs) == 1:
             # A block found far from A (probing shoves it) goes home first;
@@ -771,6 +783,7 @@ for trip in range(ROUND_TRIPS):
             leg["status"] = "blocked"
             leg["blocked_by"] = blocked_by
             break
+        say("picking up the " + COLOUR + " " + NOUN + " at " + cm([block["x"], block["y"]]))
         grasp = pick(block, yaw)
         if grasp is None:
             leg["status"] = "move_failed"
@@ -782,6 +795,7 @@ for trip in range(ROUND_TRIPS):
             leg["approach"] = grasp.get("approach")
             leg["approach_z"] = grasp.get("approach_z")
             break
+        say("carrying the " + COLOUR + " " + NOUN + " to " + cm(target))
         placed = place(block, grasp, target)
         if placed is None:
             leg["status"] = "move_failed"
@@ -790,6 +804,7 @@ for trip in range(ROUND_TRIPS):
         # The verify looks wide: the hand just put the block
         # here, and an untaught eye (new bracket, run 0085) can read it 10 cm
         # off -- which is exactly the residual the verify exists to report.
+        say("checking where it landed")
         after = find(target, VERIFY_LOOK_M)
         if after is None:
             # One wild look (run 0185: the block read 24 cm from where the
@@ -841,6 +856,7 @@ for trip in range(ROUND_TRIPS):
             leg["eye_offset_xyz"] = lesson["offset_xyz"]
         leg["looks"] = looks
         leg["status"] = "verified" if error < VERIFY_M else "off_target"
+        say(leg["status"] + ", " + str(int(round(error * 1000))) + " mm from the goal")
         origin = [after["x"], after["y"]]
         if leg["status"] != "verified":
             # An off-target block may be against a neighbour; the next pick
@@ -848,10 +864,13 @@ for trip in range(ROUND_TRIPS):
             # grasp fired the reflex). Stop and say so.
             break
     if legs[-1]["status"] != "verified":
+        if legs[-1]["status"] not in ("not_found", "off_target"):
+            say("stopped: " + legs[-1]["status"].replace("_", " "))
         break
+verified = sum(1 for leg in legs if leg["status"] == "verified")
+franka_real.announce(str(verified) + " of " + str(2 * ROUND_TRIPS) + " legs verified; going home")
 go_home()
 
-verified = sum(1 for leg in legs if leg["status"] == "verified")
 result = {
     "ok": FAILED_MOVE["stage"] is None and verified == 2 * ROUND_TRIPS,
     "colour": COLOUR,

@@ -138,6 +138,8 @@ for leg_index in range(LEGS):
         break
     start, target = goal
     instruction = "carry the " + COLOUR + " block from " + cm(start) + " to " + cm(target)
+    # For the bench's status page (2026-11-25); policy_chunk adds the policy's name.
+    franka_real.announce("leg " + str(leg_index + 1) + "/" + str(LEGS) + ": " + POLICY + " is to " + instruction)
     leg = {"instruction": instruction, "from": [round(start[0], 4), round(start[1], 4)],
            "to": [round(target[0], 4), round(target[1], 4)], "chunks": 0, "grasped": False}
     # Start where the training legs started. franka_raw_to_lerobot.py --per-leg
@@ -183,6 +185,7 @@ for leg_index in range(LEGS):
     if stop is not None:
         legs.append(leg)
         break
+    franka_real.announce("leg " + str(leg_index + 1) + "/" + str(LEGS) + ": the policy let go; checking where the block landed")
     open_gripper()
     go_home()
     blocks = scan()
@@ -198,6 +201,8 @@ for leg_index in range(LEGS):
     leg["error_m"] = None if landed is None else round(landed, 4)
     leg["status"] = "verified" if (released and landed is not None and landed < VERIFY_M) else "not_verified"
     legs.append(leg)
+    franka_real.announce("leg " + str(leg_index + 1) + "/" + str(LEGS) + ": " + leg["status"].replace("_", " ")
+                         + ("" if landed is None else ", " + str(int(round(landed * 1000))) + " mm from the goal"))
     if leg["status"] != "verified":
         stop = stop or "leg not verified"
         break
