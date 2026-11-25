@@ -413,7 +413,36 @@ def contact_ee_z(block):
     return TABLE_Z + (vertical - GRASP_OFFSET)
 
 
+SWING_RAD = 2.0  # a move needing more joint travel than this tries the hand turned 180 degrees
+
+
+def swing(x, y, z, quat):
+    """Joint travel from here to the IK solution for this pose; None if none."""
+    ik = solve_ik(Pose(position=[x, y, z], quaternion_wxyz=quat, frame="base"))
+    if not ik.ok:
+        return None
+    here = get_robot_state().joint_positions["primary"]
+    return math.sqrt(sum((float(a) - float(b)) ** 2 for a, b in zip(ik.joint_positions, here)))
+
+
 def pose(x, y, z, quat):
+    """A down-pointing pose to move to, with the hand turned 180 degrees about
+    its axis when that is a much shorter way there.
+
+    The planner interpolates in joint space to the IK solution nearest the
+    arm; when the wrist cannot turn as far as asked, that solution is the
+    arm's other configuration, 4-6.5 rad away, and the straight joint path
+    between them swings the hand up to z 0.7-0.8: the workspace guard refused
+    it three times in 28 runs (1060 retreat, 1077 carry, 1078 approach,
+    2026-11-25; 1078 offline: 6.37 rad as asked, 1.52 turned, never above
+    6 cm). The jaws and the blocks are symmetric under the half turn, so it
+    grasps, carries and places the same. Asked-for unless it needs a swing."""
+    asked = swing(x, y, z, quat)
+    if asked is None or asked > SWING_RAD:
+        turned = [-quat[3], quat[2], -quat[1], quat[0]]
+        other = swing(x, y, z, turned)
+        if other is not None and (asked is None or other < asked):
+            quat = turned
     return {"position": [x, y, z], "frame": "base", "quaternion_wxyz": quat}
 
 
