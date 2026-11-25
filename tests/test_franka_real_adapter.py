@@ -480,7 +480,60 @@ def test_extension_tools_register_under_the_approved_prefix():
     assert "franka_real.descend_to_contact" in names
     assert "franka_real.report_hand_eye_residual" in names
     assert "franka_real.policy_chunk" in names
+    assert "franka_real.announce" in names
     assert "move_to_pose" in names
+
+
+def test_status_page_is_off_unless_asked_for(monkeypatch):
+    """Without CAP_HARNESS_STATUS_DIR nothing is published and announce is a no-op."""
+    from cap_harness.franka_real.status import STATUS_DIR_ENV
+
+    monkeypatch.delenv(STATUS_DIR_ENV, raising=False)
+    _, adapter = build()
+    assert getattr(adapter, "_status", None) is None
+    assert adapter.announce("leg 1/6: looking for the red block") == {"ok": True}
+    adapter.close()
+
+
+def test_status_page_mirrors_announcements_frames_and_plant_events(monkeypatch, tmp_path):
+    """The status publisher writes status.json and a camera thumbnail from the
+    station's latest frame, takes the program's announcement and the env's
+    last command event, and marks the run ended at close."""
+    from cap_harness.franka_real.status import STATUS_DIR_ENV
+
+    monkeypatch.setenv(STATUS_DIR_ENV, str(tmp_path))
+    env, adapter = build()
+    publisher = adapter._status
+    assert publisher is not None
+    adapter.announce("leg 2/6: carrying the red block to (52, -7)")
+    env.note_event("descend", floor_z=0.02, speed_m_s=0.02, start_z=0.1)
+    publisher._publish()
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["activity"] == "leg 2/6: carrying the red block to (52, -7)"
+    assert status["plant"] == "descending until contact"
+    assert status["driver"] == "program"
+    assert status["running"] is True
+    assert (tmp_path / "wrist.jpg").read_bytes()[:2] == b"\xff\xd8"
+    adapter.close()
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["running"] is False
+    assert "ended_t" in status
+
+
+def test_status_publisher_swallows_its_own_failures(tmp_path):
+    """A camera that raises costs the publisher a counted error, never the run."""
+    from cap_harness.franka_real.status import StatusPublisher
+
+    class Broken:
+        events = []
+
+        def capture(self):
+            raise RuntimeError("no frame")
+
+    publisher = StatusPublisher(Broken(), tmp_path)
+    publisher._publish()
+    assert publisher.errors == 1
+    assert json.loads((tmp_path / "status.json").read_text())["cameras"] == []
 
 
 def test_contact_descent_stops_on_a_surface_and_unloads():

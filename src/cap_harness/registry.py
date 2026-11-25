@@ -82,6 +82,7 @@ FRANKA_REAL_PUBLIC_TOOL_NAMES = frozenset(
         "franka_real.descend_to_contact",
         "franka_real.report_hand_eye_residual",
         "franka_real.policy_chunk",
+        "franka_real.announce",
     }
 )
 

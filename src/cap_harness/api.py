@@ -1593,6 +1593,7 @@ class CapApi:
             ("descend_to_contact", "execution"),
             ("report_hand_eye_residual", "perception"),
             ("policy_chunk", "execution"),
+            ("announce", "metadata"),
             ("get_base_pose", "metadata"),
             ("navigate_to_pose", "execution"),
             ("move_torso", "execution"),

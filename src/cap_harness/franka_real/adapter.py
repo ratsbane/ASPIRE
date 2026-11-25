@@ -469,7 +469,64 @@ class FrankaRealAdapter:
         elif self._task_context is None:
             raise ValueError("reset needs a franka_real task name or metadata")
         self._start_episode_recording()
+        self._start_status()
         return self.get_observation()
+
+    # -- the bench status page -------------------------------------------------
+
+    def _start_status(self) -> None:
+        """Mirror the run into ``CAP_HARNESS_STATUS_DIR`` for the status page.
+
+        Off unless the variable is set. Best-effort throughout: see
+        :mod:`cap_harness.franka_real.status`.
+        """
+        if getattr(self, "_status", None) is not None:
+            return
+        try:
+            from .status import from_environment
+
+            publisher = from_environment(self._env)
+            if publisher is None:
+                return
+            context = self._task_context
+            root = getattr(self._run_observer, "root", None)
+            publisher.update(
+                task=None if context is None else context.task_name,
+                seed=None if context is None else context.metadata.get("seed"),
+                spot_mode=None if context is None else context.metadata.get("spot_mode"),
+                run=None if root is None else Path(root).name,
+                driver="program",
+                instruction=None,
+            )
+            if publisher.start():
+                self._status = publisher
+        except Exception:
+            self._status = None
+
+    def _status_update(self, **fields: Any) -> None:
+        publisher = getattr(self, "_status", None)
+        if publisher is None:
+            return
+        try:
+            publisher.update(**fields)
+        except Exception:
+            pass
+
+    def announce(self, text: str) -> dict[str, Any]:
+        """Say what the program is doing, for the bench's status page.
+
+        Exposed to programs as ``franka_real.announce``, e.g.
+        ``announce("leg 3/6: carrying the red block to (52, -7)")``. It does not
+        touch the plant and never fails: without a status page it is a no-op.
+        """
+        publisher = getattr(self, "_status", None)
+        if publisher is not None:
+            try:
+                publisher.announce(str(text))
+                publisher.update(driver="program")
+            except Exception:
+                pass
+        return {"ok": True}
 
     # -- episode recording -------------------------------------------------
 
@@ -948,6 +1005,7 @@ class FrankaRealAdapter:
         }
         if instruction:
             request["instruction"] = str(instruction)
+        self._status_update(driver=f"policy {policy}", instruction=instruction)
         host = self._policy_host()
         try:
             if policy not in self._policy_reset_done:
@@ -1224,6 +1282,13 @@ class FrankaRealAdapter:
 
     def close(self) -> None:
         self.finish_episode_recording()
+        publisher = getattr(self, "_status", None)
+        self._status = None
+        if publisher is not None:
+            try:
+                publisher.stop(success=bool(self.last_success_report.get("verdict", False)))
+            except Exception:
+                pass
         self._env.close()
 
 
