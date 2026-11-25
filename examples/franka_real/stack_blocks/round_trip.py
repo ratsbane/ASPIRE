@@ -716,12 +716,31 @@ franka_real.announce("round trip, " + ("random goals" if VARIED else "fixed spot
 go_home()  # start from home: a run can begin wherever the last one left the arm (run 0121)
 origin = FIRST_LOOKS[0]
 rehome = False
+# Varied mode: each leg after the first carries a colour drawn at random, so
+# the block named is often not the one under the hand (Doug, 2026-11-25). In
+# the fixed round trips every leg began open over the block it was about to
+# carry -- the one the last leg put down -- so a policy never needed the words
+# or the image to know what to grasp, and SmolVLA went to remembered spots.
+# Where each colour was last seen; a colour not seen yet is searched for.
+known = {}
 for trip in range(ROUND_TRIPS):
     for outbound in (True, False):
         leg = {"trip": trip, "from": origin, "status": "started"}
         legs.append(leg)
+        if VARIED and len(legs) > 1:
+            last = COLOUR
+            COLOUR = COLOURS[min(int(uniform(0, len(COLOURS))), len(COLOURS) - 1)]
+            if COLOUR != last:
+                origin = known.get(COLOUR)
+                leg["from"] = origin
         say("looking for the " + COLOUR + " " + NOUN)
-        if len(legs) == 1:
+        if len(legs) > 1 and origin is None:
+            block = None
+            for look in FIRST_LOOKS:
+                block = find(look, FIRST_NEAR_M)
+                if block is not None:
+                    break
+        elif len(legs) == 1:
             block = None
             # The seed's colour first; if no lying block of it is within the
             # hand's working area (red at the table's edge, runs 0173, 0182),
@@ -736,6 +755,14 @@ for trip in range(ROUND_TRIPS):
                     break
         else:
             block = find(origin, NEAR_M)
+            if block is None and VARIED:
+                # Knocked or misread since it was last seen: search the band.
+                for look in FIRST_LOOKS:
+                    block = find(look, FIRST_NEAR_M)
+                    if block is not None:
+                        break
+        leg["colour"] = COLOUR
+        leg["object"] = COLOUR + " " + NOUN
         if block is None:
             leg["status"] = "not_found"
             say("could not find the " + COLOUR + " " + NOUN)
@@ -858,6 +885,7 @@ for trip in range(ROUND_TRIPS):
         leg["status"] = "verified" if error < VERIFY_M else "off_target"
         say(leg["status"] + ", " + str(int(round(error * 1000))) + " mm from the goal")
         origin = [after["x"], after["y"]]
+        known[COLOUR] = origin
         if leg["status"] != "verified":
             # An off-target block may be against a neighbour; the next pick
             # would be a gamble (run 0010: a 33 mm miss, then the descent to
