@@ -91,7 +91,7 @@ def uniform(lo, hi):
     RNG[0] = (RNG[0] * 1664525 + 1013904223) % 4294967296
     return lo + (hi - lo) * RNG[0] / 4294967296.0
 
-FAILED_MOVE = {"stage": None, "error": None}
+FAILED_MOVE = {"stage": None, "error": None, "set_down": False}
 
 
 def must(move_result, stage):
@@ -666,6 +666,21 @@ def random_goal(block, seen):
     return None
 
 
+def set_down(expect_z):
+    """Put a held block down where the hand is, then open.
+
+    For a carry the guard refused or a move that failed with the block in the
+    jaws: go_home opens them before it moves, and run 1077 (2026-11-25)
+    dropped blue from lift height onto the floor that way. Where the hand
+    stops is over the spot the block was just picked from (a refused carry
+    never moves) or over the clear goal (a failed pre-place), so the way down
+    is clear."""
+    FAILED_MOVE["set_down"] = True
+    franka_real.announce("a move failed while holding the block: setting it down here")
+    franka_real.descend_to_contact(floor_z=max(expect_z - FLOOR_BELOW_M, 0.004))
+    open_gripper()
+
+
 def place(block, grasp, slot):
     # No "unwinding" here. A base joint past 90 degrees is the arm's normal
     # reach for a block lying across the table (yaw ~80: the solver has no
@@ -677,9 +692,11 @@ def place(block, grasp, slot):
     quat = grasp["quat"]
     if not must(move_to_pose(pose(slot[0], slot[1], CARRY_Z, quat),
                              max_steps=LONG_MOVE_STEPS), "carry"):
+        set_down(expect_z)
         return None
     if not must(move_to_pose(pose(slot[0], slot[1], expect_z + PRE_PLACE_ABOVE_M, quat),
                              max_steps=LONG_MOVE_STEPS), "pre_place"):
+        set_down(expect_z)
         return None
     touch = franka_real.descend_to_contact(floor_z=max(expect_z - FLOOR_BELOW_M, 0.004))
     must(touch, "lower")
@@ -910,4 +927,5 @@ result = {
     "legs": legs,
     "stage": FAILED_MOVE["stage"],
     "error": FAILED_MOVE["error"],
+    "set_down": FAILED_MOVE["set_down"],
 }
